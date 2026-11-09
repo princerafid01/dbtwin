@@ -161,10 +161,10 @@ func listBranches() error {
 
 
 // main reads the command and calls the right function.
-// Usage: dbbranch create <name> | dbbranch delete <name> | dbbranch list
+// Usage: dbtwin create <name> | dbtwin delete <name> | dbtwin list
 func main() {
 	if len(os.Args) < 2 {
-		fmt.Println("usage: dbbranch <create|delete|list> [name]")
+		fmt.Println("usage: dbtwin <create|delete|list> [name]")
 		os.Exit(1)
 	}
 	command := os.Args[1]
@@ -175,7 +175,7 @@ func main() {
 		err = listBranches()
 	case "create", "delete":
 		if len(os.Args) < 3 {
-			fmt.Println("usage: dbbranch", command, "<name>")
+			fmt.Println("usage: dbtwin", command, "<name>")
 			os.Exit(1)
 		}
 		branch := os.Args[2]
