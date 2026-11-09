@@ -9,6 +9,7 @@ import (
 	"regexp"
 	"strconv"
 	"strings"
+	"time"
 )
 
 // run executes an outside command (like "zfs snapshot ...").
@@ -68,6 +69,39 @@ func checkNotMain(cfg Config, branch string) error {
 // We use it to ask zfs or docker "does this thing exist?"
 func exists(name string, args ...string) bool {
 	return exec.Command(name, args...).Run() == nil
+}
+
+// lastLogs returns the last 20 lines the container printed.
+// We grab them before cleanup, because cleanup deletes the container and its logs.
+// MySQL logs to stderr, so we keep both stdout and stderr.
+func lastLogs(container string) string {
+	out, _ := exec.Command("docker", "logs", "--tail", "20", container).CombinedOutput()
+	return strings.TrimSpace(string(out))
+}
+
+// waitForMySQL checks every second until MySQL in the container answers,
+// or gives up after timeout. It stops early if the container has stopped,
+// because a crashed MySQL will never answer.
+// mysqladmin ping succeeds as soon as the server responds, even without a password.
+func waitForMySQL(container string, timeout time.Duration) error {
+	fmt.Println("waiting for MySQL...")
+	deadline := time.Now().Add(timeout)
+	for {
+		if exists("docker", "exec", container, "mysqladmin", "ping", "--silent") {
+			return nil
+		}
+
+		// is the container still running? "true" or "false"
+		running, err := output("docker", "inspect", "-f", "{{.State.Running}}", container)
+		if err != nil || running != "true" {
+			return fmt.Errorf("MySQL in %s stopped while starting. last log lines:\n%s", container, lastLogs(container))
+		}
+
+		if time.Now().After(deadline) {
+			return fmt.Errorf("MySQL in %s was not ready after %v. last log lines:\n%s", container, timeout, lastLogs(container))
+		}
+		time.Sleep(time.Second)
+	}
 }
 
 // checkBranchFree stops if any part of the branch already exists.
@@ -149,8 +183,18 @@ func createBranch(cfg Config, branch string) (err error) {
 		return err
 	}
 
+	// step 6: wait until MySQL really accepts connections.
+	// if it never does, returning the error runs the cleanup above.
+	if err := waitForMySQL(container, 60*time.Second); err != nil {
+		return err
+	}
+
 	// tell the user how to connect
-	fmt.Printf("branch %s ready on %s\n", branch, hostPort)
+	fmt.Printf("branch %s is ready\n", branch)
+	fmt.Printf("  host:     %s\n", cfg.BindAddress)
+	fmt.Printf("  port:     %d\n", port)
+	fmt.Printf("  user:     root (same users and passwords as main)\n")
+	fmt.Printf("  connect:  mysql -h %s -P %d -u root -p\n", cfg.BindAddress, port)
 	return nil
 }
 
