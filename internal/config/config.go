@@ -1,4 +1,6 @@
-package main
+// Package config loads dbtwin's settings from defaults, a config file
+// and environment variables.
+package config
 
 import (
 	"bytes"
@@ -34,12 +36,12 @@ func defaultConfig() Config {
 	}
 }
 
-// loadConfig builds the settings in three layers:
+// Load builds the settings in three layers:
 // 1. built-in defaults
 // 2. the config file, if it exists (only the keys it contains)
 // 3. DBTWIN_* environment variables, if they are set and not empty
 // It also reports whether the config file was found.
-func loadConfig() (Config, bool, error) {
+func Load() (Config, bool, error) {
 	cfg := defaultConfig()
 
 	// layer 2: the config file
@@ -105,9 +107,9 @@ func (c Config) check() error {
 	return nil
 }
 
-// printConfig shows the settings in use, as JSON.
+// Print shows the settings in use, as JSON.
 // The output can be saved as a config file.
-func printConfig(cfg Config, fileUsed bool) error {
+func Print(cfg Config, fileUsed bool) error {
 	if fileUsed {
 		fmt.Fprintln(os.Stderr, "config file:", configPath)
 	} else {
