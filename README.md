@@ -1,4 +1,4 @@
-# dbtwin
+# dbTwin
 
 **Instant, isolated MySQL copies for every pull request, powered by ZFS copy-on-write.**
 
