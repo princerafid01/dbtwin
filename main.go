@@ -1,10 +1,11 @@
 package main
 
 import (
-	"fmt"     // printing text to the screen
-	"os"      // reading command-line arguments and exiting the program
-	"os/exec" // running other programs like zfs and docker
+	"fmt"
 	"net"
+	"os"
+	"os/exec"
+	"path/filepath" // joining folder paths safely
 	"strings"
 )
 
@@ -66,8 +67,14 @@ func createBranch(branch string) (err error) {
 		return err
 	}
 
-	// step 3: delete auto.cnf so the branch gets its own server ID
-	if err := os.Remove("/" + clone + "/auto.cnf"); err != nil {
+	// step 3: find where the clone is mounted
+	dir, err := mountpoint(clone)
+	if err != nil {
+		return err
+	}
+
+	// delete auto.cnf so the branch gets its own MySQL server ID
+	if err := os.Remove(filepath.Join(dir, "auto.cnf")); err != nil {
 		return fmt.Errorf("remove auto.cnf failed: %v", err)
 	}
 
@@ -80,7 +87,7 @@ func createBranch(branch string) (err error) {
 	// step 5: start MySQL on the clone, using that port
 	if err := run("docker", "run", "-d",
 		"--name", "mysql-"+branch,
-		"-v", "/"+clone+":/var/lib/mysql",
+		"-v", dir+":/var/lib/mysql", // real clone folder -> MySQL data folder
 		"-p", fmt.Sprintf("127.0.0.1:%d:3306", port), // e.g. 127.0.0.1:41235:3306
 		"mysql:8.4",
 	); err != nil {
@@ -122,6 +129,20 @@ func output(name string, args ...string) (string, error) {
 		return "", fmt.Errorf("%s failed: %v", name, err)
 	}
 	return strings.TrimSpace(string(out)), nil
+}
+
+// mountpoint asks ZFS where a dataset is mounted, e.g. /tank/mysql-pr-1.
+// We ask instead of guessing, because the mountpoint can be changed.
+func mountpoint(dataset string) (string, error) {
+	mp, err := output("zfs", "get", "-H", "-o", "value", "mountpoint", dataset)
+	if err != nil {
+		return "", err
+	}
+	// these values mean the dataset has no usable folder path
+	if mp == "" || mp == "-" || mp == "none" || mp == "legacy" {
+		return "", fmt.Errorf("dataset %s has no usable mountpoint (got %q)", dataset, mp)
+	}
+	return mp, nil
 }
 
 // listBranches prints every branch with its disk usage and port.
