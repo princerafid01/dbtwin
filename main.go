@@ -6,6 +6,8 @@ import (
 	"os"
 	"os/exec"
 	"path/filepath" // joining folder paths safely
+	"regexp"
+	"strconv"
 	"strings"
 )
 
@@ -28,11 +30,11 @@ func run(name string, args ...string) error {
 	return nil
 }
 
-// freePort asks the operating system for an unused port.
+// freePort asks the operating system for an unused port on addr.
 // Listening on port 0 means "give me any free port".
 // We read which port we got, then close it so MySQL can use it.
-func freePort() (int, error) {
-	l, err := net.Listen("tcp", "127.0.0.1:0")
+func freePort(addr string) (int, error) {
+	l, err := net.Listen("tcp", net.JoinHostPort(addr, "0"))
 	if err != nil {
 		return 0, err
 	}
@@ -40,11 +42,62 @@ func freePort() (int, error) {
 	return l.Addr().(*net.TCPAddr).Port, nil
 }
 
+// validName allows only letters, numbers, dash and underscore, 1 to 40 characters.
+// This keeps names safe for zfs, docker and the shell.
+var validName = regexp.MustCompile(`^[A-Za-z0-9_-]{1,40}$`)
+
+// checkName stops if the branch name has unsafe characters or is too long.
+func checkName(branch string) error {
+	if !validName.MatchString(branch) {
+		return fmt.Errorf("invalid branch name %q: use only letters, numbers, - and _ (max 40 characters)", branch)
+	}
+	return nil
+}
+
+// checkNotMain stops if the branch would use the main dataset,
+// e.g. branch "main" with the defaults gives tank/mysql-main.
+// Without this, "dbtwin delete main" would remove the main MySQL container.
+func checkNotMain(cfg Config, branch string) error {
+	if cfg.BranchPrefix+branch == cfg.MainDataset {
+		return fmt.Errorf("invalid branch name %q: it would use the main dataset %s", branch, cfg.MainDataset)
+	}
+	return nil
+}
+
+// exists runs a command and reports whether it succeeded.
+// We use it to ask zfs or docker "does this thing exist?"
+func exists(name string, args ...string) bool {
+	return exec.Command(name, args...).Run() == nil
+}
+
+// checkBranchFree stops if any part of the branch already exists.
+// It runs before we change anything, so there is nothing to clean up.
+func checkBranchFree(branch, snap, clone, container string) error {
+	if exists("zfs", "list", "-H", clone) ||
+		exists("zfs", "list", "-H", "-t", "snapshot", snap) ||
+		exists("docker", "inspect", container) {
+		return fmt.Errorf("branch %s already exists (use \"dbtwin delete %s\" first)", branch, branch)
+	}
+	return nil
+}
+
 // createBranch makes a new branch:
 // snapshot main -> clone -> delete auto.cnf -> start MySQL
-func createBranch(branch string) (err error) {
-	snap := "tank/mysql-main@" + branch // e.g. tank/mysql-main@pr-1
-	clone := "tank/mysql-" + branch     // e.g. tank/mysql-pr-1
+func createBranch(cfg Config, branch string) (err error) {
+	snap := cfg.MainDataset + "@" + branch    // e.g. tank/mysql-main@pr-1
+	clone := cfg.BranchPrefix + branch        // e.g. tank/mysql-pr-1
+	container := cfg.ContainerPrefix + branch // e.g. mysql-pr-1
+
+	// stop early if the name is unsafe or the branch already exists
+	if err := checkName(branch); err != nil {
+		return err
+	}
+	if err := checkNotMain(cfg, branch); err != nil {
+		return err
+	}
+	if err := checkBranchFree(branch, snap, clone, container); err != nil {
+		return err
+	}
 
 	// step 1: snapshot the main database
 	if err := run("zfs", "snapshot", snap); err != nil {
@@ -56,7 +109,7 @@ func createBranch(branch string) (err error) {
 	defer func() {
 		if err != nil {
 			fmt.Println("create failed, cleaning up...")
-			run("docker", "rm", "-f", "mysql-"+branch) // errors ignored on purpose
+			run("docker", "rm", "-f", container) // errors ignored on purpose
 			run("zfs", "destroy", clone)
 			run("zfs", "destroy", snap)
 		}
@@ -79,35 +132,43 @@ func createBranch(branch string) (err error) {
 	}
 
 	// step 4: find a free port for this branch
-	port, err := freePort()
+	port, err := freePort(cfg.BindAddress)
 	if err != nil {
 		return err
 	}
+	// e.g. 127.0.0.1:41235 (JoinHostPort adds [ ] around IPv6 addresses)
+	hostPort := net.JoinHostPort(cfg.BindAddress, strconv.Itoa(port))
 
 	// step 5: start MySQL on the clone, using that port
 	if err := run("docker", "run", "-d",
-		"--name", "mysql-"+branch,
+		"--name", container,
 		"-v", dir+":/var/lib/mysql", // real clone folder -> MySQL data folder
-		"-p", fmt.Sprintf("127.0.0.1:%d:3306", port), // e.g. 127.0.0.1:41235:3306
-		"mysql:8.4",
+		"-p", hostPort+":3306", // e.g. 127.0.0.1:41235:3306
+		cfg.MySQLImage,
 	); err != nil {
 		return err
 	}
 
 	// tell the user how to connect
-	fmt.Printf("branch %s ready on 127.0.0.1:%d\n", branch, port)
+	fmt.Printf("branch %s ready on %s\n", branch, hostPort)
 	return nil
 }
 
-
 // deleteBranch removes a branch in the safe order:
 // stop MySQL -> delete clone -> delete snapshot
-func deleteBranch(branch string) error {
-	snap := "tank/mysql-main@" + branch
-	clone := "tank/mysql-" + branch
+func deleteBranch(cfg Config, branch string) error {
+	if err := checkName(branch); err != nil {
+		return err
+	}
+	if err := checkNotMain(cfg, branch); err != nil {
+		return err
+	}
+
+	snap := cfg.MainDataset + "@" + branch
+	clone := cfg.BranchPrefix + branch
 
 	// step 1: stop and remove the branch's MySQL container
-	if err := run("docker", "rm", "-f", "mysql-"+branch); err != nil {
+	if err := run("docker", "rm", "-f", cfg.ContainerPrefix+branch); err != nil {
 		return err
 	}
 
@@ -119,7 +180,6 @@ func deleteBranch(branch string) error {
 	// step 3: delete the snapshot it was made from
 	return run("zfs", "destroy", snap)
 }
-
 
 // output runs a command and returns what it printed, as clean text.
 // Use this when we need the result (run() only checks success).
@@ -146,9 +206,9 @@ func mountpoint(dataset string) (string, error) {
 }
 
 // listBranches prints every branch with its disk usage and port.
-func listBranches() error {
-	// -H = no header, -o name,used = only these two columns, -r tank = all datasets
-	out, err := output("zfs", "list", "-H", "-o", "name,used", "-r", "tank")
+func listBranches(cfg Config) error {
+	// -H = no header, -o name,used = only these two columns, -r = all datasets in the pool
+	out, err := output("zfs", "list", "-H", "-o", "name,used", "-r", cfg.Pool)
 	if err != nil {
 		return err
 	}
@@ -164,13 +224,13 @@ func listBranches() error {
 		name, used := fields[0], fields[1]
 
 		// keep only branch datasets, skip main and others
-		if !strings.HasPrefix(name, "tank/mysql-") || name == "tank/mysql-main" {
+		if !strings.HasPrefix(name, cfg.BranchPrefix) || name == cfg.MainDataset {
 			continue
 		}
-		branch := strings.TrimPrefix(name, "tank/mysql-") // "pr-1"
+		branch := strings.TrimPrefix(name, cfg.BranchPrefix) // "pr-1"
 
 		// ask Docker which port this branch's MySQL uses
-		port, err := output("docker", "port", "mysql-"+branch, "3306")
+		port, err := output("docker", "port", cfg.ContainerPrefix+branch, "3306")
 		if err != nil {
 			port = "not running"
 		}
@@ -180,20 +240,27 @@ func listBranches() error {
 	return nil
 }
 
-
 // main reads the command and calls the right function.
-// Usage: dbtwin create <name> | dbtwin delete <name> | dbtwin list
+// Usage: dbtwin create <name> | dbtwin delete <name> | dbtwin list | dbtwin config
 func main() {
 	if len(os.Args) < 2 {
-		fmt.Println("usage: dbtwin <create|delete|list> [name]")
+		fmt.Println("usage: dbtwin <create|delete|list|config> [name]")
 		os.Exit(1)
 	}
 	command := os.Args[1]
 
-	var err error
+	// load settings before doing anything, so a bad config stops us early
+	cfg, fileUsed, err := loadConfig()
+	if err != nil {
+		fmt.Println(err)
+		os.Exit(1)
+	}
+
 	switch command {
 	case "list":
-		err = listBranches()
+		err = listBranches(cfg)
+	case "config":
+		err = printConfig(cfg, fileUsed)
 	case "create", "delete":
 		if len(os.Args) < 3 {
 			fmt.Println("usage: dbtwin", command, "<name>")
@@ -201,9 +268,9 @@ func main() {
 		}
 		branch := os.Args[2]
 		if command == "create" {
-			err = createBranch(branch)
+			err = createBranch(cfg, branch)
 		} else {
-			err = deleteBranch(branch)
+			err = deleteBranch(cfg, branch)
 		}
 	default:
 		fmt.Println("unknown command:", command)
