@@ -10,6 +10,8 @@ ZFS snapshots are instant, and clones share blocks with the original. A new bran
 
 ## How it works
 
+The examples in this README use the default settings: pool `tank`, main dataset `tank/mysql-main`, image `mysql:8.4`. You can change all of them (see [Configuration](#configuration)).
+
 ```
   tank/mysql-main            (your main MySQL data)
         │
