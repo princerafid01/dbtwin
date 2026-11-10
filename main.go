@@ -9,14 +9,24 @@ import (
 	"github.com/princerafid01/dbtwin/internal/config"
 )
 
+// version is the dbtwin version. It is "dev" for local builds and is set
+// at release time with: go build -ldflags "-X main.version=v1.0.0"
+var version = "dev"
+
 // main reads the command and calls the right function.
-// Usage: dbtwin create <name> | dbtwin delete <name> | dbtwin list | dbtwin config
+// Usage: dbtwin create <name> | dbtwin delete <name> | dbtwin list | dbtwin config | dbtwin version
 func main() {
 	if len(os.Args) < 2 {
-		fmt.Println("usage: dbtwin <create|delete|list|config> [name]")
+		fmt.Println("usage: dbtwin <create|delete|list|config|version> [name]")
 		os.Exit(1)
 	}
 	command := os.Args[1]
+
+	// "version" needs nothing else, so answer it right away
+	if command == "version" {
+		fmt.Println("dbtwin", version)
+		return
+	}
 
 	// first make sure the command is valid, so a typo gets
 	// "unknown command" or the usage line, not a startup check error
