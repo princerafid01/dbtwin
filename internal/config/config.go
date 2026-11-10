@@ -16,23 +16,27 @@ const configPath = "/etc/dbtwin/config.json"
 // Config holds every setting dbtwin needs.
 // The json tags are the key names used in the config file.
 type Config struct {
-	Pool            string `json:"pool"`             // ZFS pool that holds everything
-	MainDataset     string `json:"main_dataset"`     // dataset with the main MySQL data
-	BranchPrefix    string `json:"branch_prefix"`    // branch datasets are BranchPrefix + name
-	ContainerPrefix string `json:"container_prefix"` // branch containers are ContainerPrefix + name
-	MySQLImage      string `json:"mysql_image"`      // Docker image for branch containers
-	BindAddress     string `json:"bind_address"`     // address branch ports listen on
+	Pool             string `json:"pool"`               // ZFS pool that holds everything
+	MainDataset      string `json:"main_dataset"`       // dataset with the main MySQL data
+	BranchPrefix     string `json:"branch_prefix"`      // branch datasets are BranchPrefix + name
+	ContainerPrefix  string `json:"container_prefix"`   // branch containers are ContainerPrefix + name
+	MySQLImage       string `json:"mysql_image"`        // Docker image for branch containers
+	BindAddress      string `json:"bind_address"`       // address branch ports listen on
+	BranchMemory     string `json:"branch_memory"`      // memory limit for each branch container, e.g. 512m
+	BranchBufferPool string `json:"branch_buffer_pool"` // InnoDB buffer pool size for each branch, e.g. 128M
 }
 
 // defaultConfig returns the built-in settings.
 func defaultConfig() Config {
 	return Config{
-		Pool:            "tank",
-		MainDataset:     "tank/mysql-main",
-		BranchPrefix:    "tank/mysql-",
-		ContainerPrefix: "mysql-",
-		MySQLImage:      "mysql:8.4",
-		BindAddress:     "127.0.0.1",
+		Pool:             "tank",
+		MainDataset:      "tank/mysql-main",
+		BranchPrefix:     "tank/mysql-",
+		ContainerPrefix:  "mysql-",
+		MySQLImage:       "mysql:8.4",
+		BindAddress:      "127.0.0.1",
+		BranchMemory:     "512m",
+		BranchBufferPool: "128M",
 	}
 }
 
@@ -75,6 +79,8 @@ func Load() (Config, bool, error) {
 		{"DBTWIN_CONTAINER_PREFIX", &cfg.ContainerPrefix},
 		{"DBTWIN_MYSQL_IMAGE", &cfg.MySQLImage},
 		{"DBTWIN_BIND_ADDRESS", &cfg.BindAddress},
+		{"DBTWIN_BRANCH_MEMORY", &cfg.BranchMemory},
+		{"DBTWIN_BRANCH_BUFFER_POOL", &cfg.BranchBufferPool},
 	}
 	for _, e := range envs {
 		if v := os.Getenv(e.name); v != "" {
@@ -92,12 +98,14 @@ func Load() (Config, bool, error) {
 // check makes sure no setting is empty.
 func (c Config) check() error {
 	fields := map[string]string{
-		"pool":             c.Pool,
-		"main_dataset":     c.MainDataset,
-		"branch_prefix":    c.BranchPrefix,
-		"container_prefix": c.ContainerPrefix,
-		"mysql_image":      c.MySQLImage,
-		"bind_address":     c.BindAddress,
+		"pool":               c.Pool,
+		"main_dataset":       c.MainDataset,
+		"branch_prefix":      c.BranchPrefix,
+		"container_prefix":   c.ContainerPrefix,
+		"mysql_image":        c.MySQLImage,
+		"bind_address":       c.BindAddress,
+		"branch_memory":      c.BranchMemory,
+		"branch_buffer_pool": c.BranchBufferPool,
 	}
 	for key, value := range fields {
 		if value == "" {

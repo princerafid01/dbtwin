@@ -121,7 +121,7 @@ func Create(cfg config.Config, branch string) (err error) {
 	hostPort := net.JoinHostPort(cfg.BindAddress, strconv.Itoa(port))
 
 	// step 5: start MySQL on the clone, using that port
-	if err := docker.RunMySQL(container, dir, hostPort, cfg.MySQLImage); err != nil {
+	if err := docker.RunMySQL(container, dir, hostPort, cfg.MySQLImage, cfg.BranchMemory, cfg.BranchBufferPool); err != nil {
 		return err
 	}
 

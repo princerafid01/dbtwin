@@ -100,14 +100,16 @@ Settings are loaded in this order (later wins):
 2. The config file `/etc/dbtwin/config.json`, if it exists
 3. Environment variables
 
-| Setting            | Default           | Environment variable        |
-|--------------------|-------------------|-----------------------------|
-| `pool`             | `tank`            | `DBTWIN_POOL`               |
-| `main_dataset`     | `tank/mysql-main` | `DBTWIN_MAIN_DATASET`       |
-| `branch_prefix`    | `tank/mysql-`     | `DBTWIN_BRANCH_PREFIX`      |
-| `container_prefix` | `mysql-`          | `DBTWIN_CONTAINER_PREFIX`   |
-| `mysql_image`      | `mysql:8.4`       | `DBTWIN_MYSQL_IMAGE`        |
-| `bind_address`     | `127.0.0.1`       | `DBTWIN_BIND_ADDRESS`       |
+| Setting              | Default           | Environment variable        |
+|----------------------|-------------------|-----------------------------|
+| `pool`               | `tank`            | `DBTWIN_POOL`               |
+| `main_dataset`       | `tank/mysql-main` | `DBTWIN_MAIN_DATASET`       |
+| `branch_prefix`      | `tank/mysql-`     | `DBTWIN_BRANCH_PREFIX`      |
+| `container_prefix`   | `mysql-`          | `DBTWIN_CONTAINER_PREFIX`   |
+| `mysql_image`        | `mysql:8.4`       | `DBTWIN_MYSQL_IMAGE`        |
+| `bind_address`       | `127.0.0.1`       | `DBTWIN_BIND_ADDRESS`       |
+| `branch_memory`      | `512m`            | `DBTWIN_BRANCH_MEMORY`      |
+| `branch_buffer_pool` | `128M`            | `DBTWIN_BRANCH_BUFFER_POOL` |
 
 Example `/etc/dbtwin/config.json`:
 
@@ -119,6 +121,8 @@ Example `/etc/dbtwin/config.json`:
   "mysql_image": "mysql:8.0"
 }
 ```
+
+`branch_memory` is the Docker memory limit for each branch container (`docker run --memory`). `branch_buffer_pool` is the InnoDB buffer pool size for each branch; keep it well below `branch_memory`. Branch containers also run with the performance schema off to save RAM. These limits apply only to branches, not to your main MySQL container.
 
 If you change `pool`, also set `main_dataset` and `branch_prefix` to match.
 

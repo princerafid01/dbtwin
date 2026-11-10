@@ -10,13 +10,19 @@ import (
 
 // RunMySQL starts a MySQL container on a data folder,
 // with MySQL's port 3306 published on hostPort (e.g. 127.0.0.1:41235).
-func RunMySQL(container, dataDir, hostPort, image string) error {
+// memory caps the container's RAM (e.g. 512m) and bufferPool sets
+// MySQL's InnoDB buffer pool size (e.g. 128M), so it fits inside that cap.
+func RunMySQL(container, dataDir, hostPort, image, memory, bufferPool string) error {
 	return command.Run("docker", "run", "-d",
 		"--restart", "unless-stopped", // come back after a Docker or server restart
 		"--name", container,
 		"-v", dataDir+":/var/lib/mysql", // real clone folder -> MySQL data folder
 		"-p", hostPort+":3306", // e.g. 127.0.0.1:41235:3306
+		"--memory", memory, // e.g. 512m, so one branch can't use all the server's RAM
 		image,
+		// everything after the image name is passed to mysqld
+		"--innodb-buffer-pool-size="+bufferPool, // e.g. 128M, must fit inside --memory
+		"--performance-schema=OFF",              // saves extra RAM
 	)
 }
 
