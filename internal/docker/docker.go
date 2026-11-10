@@ -12,6 +12,7 @@ import (
 // with MySQL's port 3306 published on hostPort (e.g. 127.0.0.1:41235).
 func RunMySQL(container, dataDir, hostPort, image string) error {
 	return command.Run("docker", "run", "-d",
+		"--restart", "unless-stopped", // come back after a Docker or server restart
 		"--name", container,
 		"-v", dataDir+":/var/lib/mysql", // real clone folder -> MySQL data folder
 		"-p", hostPort+":3306", // e.g. 127.0.0.1:41235:3306
@@ -54,9 +55,11 @@ func WaitForMySQL(container string, timeout time.Duration) error {
 			return nil
 		}
 
-		// is the container still running? "true" or "false"
-		running, err := command.Output("docker", "inspect", "-f", "{{.State.Running}}", container)
-		if err != nil || running != "true" {
+		// is the container still running, and has it never crashed? e.g. "running 0".
+		// with --restart, Docker brings a crashed MySQL back up on its own,
+		// so a restart count above 0 also means it crashed.
+		state, err := command.Output("docker", "inspect", "-f", "{{.State.Status}} {{.RestartCount}}", container)
+		if err != nil || state != "running 0" {
 			return fmt.Errorf("MySQL in %s stopped while starting. last log lines:\n%s", container, lastLogs(container))
 		}
 

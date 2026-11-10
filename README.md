@@ -61,6 +61,7 @@ sudo zfs create -o recordsize=16K -o compression=lz4 -o atime=off tank/mysql-mai
 ```bash
 sudo docker run -d \
   --name mysql-main \
+  --restart unless-stopped \
   -e MYSQL_ROOT_PASSWORD=secret \
   -v /tank/mysql-main:/var/lib/mysql \
   -p 127.0.0.1:3306:3306 \
@@ -145,8 +146,13 @@ If you built from source, use `./dbtwin` instead of `dbtwin`.
 $ sudo dbtwin create pr-42
 > zfs [snapshot tank/mysql-main@pr-42]
 > zfs [clone tank/mysql-main@pr-42 tank/mysql-pr-42]
-> docker [run -d --name mysql-pr-42 -v /tank/mysql-pr-42:/var/lib/mysql -p 127.0.0.1:41235:3306 mysql:8.4]
-branch pr-42 ready on 127.0.0.1:41235
+> docker [run -d --restart unless-stopped --name mysql-pr-42 -v /tank/mysql-pr-42:/var/lib/mysql -p 127.0.0.1:41235:3306 mysql:8.4]
+waiting for MySQL...
+branch pr-42 is ready
+  host:     127.0.0.1
+  port:     41235
+  user:     root (same users and passwords as main)
+  connect:  mysql -h 127.0.0.1 -P 41235 -u root -p
 ```
 
 Connect to it like any MySQL server:
