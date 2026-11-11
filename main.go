@@ -7,6 +7,7 @@ import (
 	"github.com/princerafid01/dbtwin/internal/branch"
 	"github.com/princerafid01/dbtwin/internal/check"
 	"github.com/princerafid01/dbtwin/internal/config"
+	"github.com/princerafid01/dbtwin/internal/source"
 )
 
 // version is the dbtwin version. It is "dev" for local builds and is set
@@ -14,10 +15,11 @@ import (
 var version = "dev"
 
 // main reads the command and calls the right function.
-// Usage: dbtwin create <name> | dbtwin delete <name> | dbtwin list | dbtwin config | dbtwin version
+// Usage: dbtwin create <name> | dbtwin delete <name> | dbtwin list |
+// dbtwin refresh --check | dbtwin config | dbtwin version
 func main() {
 	if len(os.Args) < 2 {
-		fmt.Println("usage: dbtwin <create|delete|list|config|version> [name]")
+		fmt.Println("usage: dbtwin <create|delete|list|refresh|config|version> [name]")
 		os.Exit(1)
 	}
 	command := os.Args[1]
@@ -39,6 +41,12 @@ func main() {
 			os.Exit(1)
 		}
 		name = os.Args[2]
+	case "refresh":
+		// only the connection check exists so far, copying data comes later
+		if len(os.Args) < 3 || os.Args[2] != "--check" {
+			fmt.Println("usage: dbtwin refresh --check (copying data is not supported yet)")
+			os.Exit(1)
+		}
 	default:
 		fmt.Println("unknown command:", command)
 		os.Exit(1)
@@ -69,6 +77,8 @@ func main() {
 		err = branch.Create(cfg, name)
 	case "delete":
 		err = branch.Delete(cfg, name)
+	case "refresh":
+		err = source.PrintCheck(cfg)
 	}
 
 	if err != nil {

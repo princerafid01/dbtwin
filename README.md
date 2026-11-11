@@ -110,6 +110,11 @@ Settings are loaded in this order (later wins):
 | `bind_address`       | `127.0.0.1`       | `DBTWIN_BIND_ADDRESS`       |
 | `branch_memory`      | `512m`            | `DBTWIN_BRANCH_MEMORY`      |
 | `branch_buffer_pool` | `128M`            | `DBTWIN_BRANCH_BUFFER_POOL` |
+| `source_host`        | (none)            | `DBTWIN_SOURCE_HOST`        |
+| `source_port`        | `3306`            | `DBTWIN_SOURCE_PORT`        |
+| `source_user`        | (none)            | `DBTWIN_SOURCE_USER`        |
+| `source_password`    | (none)            | `DBTWIN_SOURCE_PASSWORD`    |
+| `source_databases`   | (none)            | `DBTWIN_SOURCE_DATABASES`   |
 
 Example `/etc/dbtwin/config.json`:
 
@@ -123,6 +128,8 @@ Example `/etc/dbtwin/config.json`:
 ```
 
 `branch_memory` is the Docker memory limit for each branch container (`docker run --memory`). `branch_buffer_pool` is the InnoDB buffer pool size for each branch; keep it well below `branch_memory`. Branch containers also run with the performance schema off to save RAM. These limits apply only to branches, not to your main MySQL container.
+
+The `source_*` settings describe the MySQL server that `dbtwin refresh` copies from. Only `refresh` uses them, so they may stay empty otherwise. `source_databases` is a comma-separated list, e.g. `"shop,blog"`. `dbtwin config` shows `source_password` as `***`.
 
 If you change `pool`, also set `main_dataset` and `branch_prefix` to match.
 
@@ -138,7 +145,7 @@ See the settings in use:
 sudo dbtwin config
 ```
 
-The output is JSON, so you can save it as a starting config file. A misspelled key or an empty value stops dbtwin with a clear error.
+The output is JSON, so you can save it as a starting config file (put the real `source_password` back in). A misspelled key or an empty value stops dbtwin with a clear error.
 
 ## Usage
 
@@ -184,6 +191,18 @@ $ sudo dbtwin delete pr-42
 > zfs [destroy tank/mysql-pr-42]
 > zfs [destroy tank/mysql-main@pr-42]
 ```
+
+### Check the source server
+
+```console
+$ sudo DBTWIN_SOURCE_PASSWORD=secret dbtwin refresh --check
+connected to db.example.com:3306 as dbtwin
+DATABASE                  SIZE (MB)
+shop                         812.4
+blog                          35.0
+```
+
+This connects to the source server and checks that every database in `source_databases` exists, using a throwaway `mysql_image` container (`docker run --rm --network host`), so you don't need a MySQL client on the host. The password is passed only through the `MYSQL_PWD` environment variable, never on a command line. Sizes are data plus indexes, from `information_schema.tables`. It only checks; copying data is not supported yet.
 
 ## Status
 

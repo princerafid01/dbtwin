@@ -24,6 +24,14 @@ type Config struct {
 	BindAddress      string `json:"bind_address"`       // address branch ports listen on
 	BranchMemory     string `json:"branch_memory"`      // memory limit for each branch container, e.g. 512m
 	BranchBufferPool string `json:"branch_buffer_pool"` // InnoDB buffer pool size for each branch, e.g. 128M
+
+	// the source MySQL server that "dbtwin refresh" copies from.
+	// these may be empty; only "refresh" needs them.
+	SourceHost      string `json:"source_host"`      // host of the source MySQL server
+	SourcePort      string `json:"source_port"`      // port of the source MySQL server
+	SourceUser      string `json:"source_user"`      // MySQL user to read the source with
+	SourcePassword  string `json:"source_password"`  // password for SourceUser, never printed
+	SourceDatabases string `json:"source_databases"` // comma-separated list, e.g. "shop,blog"
 }
 
 // defaultConfig returns the built-in settings.
@@ -37,6 +45,7 @@ func defaultConfig() Config {
 		BindAddress:      "127.0.0.1",
 		BranchMemory:     "512m",
 		BranchBufferPool: "128M",
+		SourcePort:       "3306",
 	}
 }
 
@@ -81,6 +90,11 @@ func Load() (Config, bool, error) {
 		{"DBTWIN_BIND_ADDRESS", &cfg.BindAddress},
 		{"DBTWIN_BRANCH_MEMORY", &cfg.BranchMemory},
 		{"DBTWIN_BRANCH_BUFFER_POOL", &cfg.BranchBufferPool},
+		{"DBTWIN_SOURCE_HOST", &cfg.SourceHost},
+		{"DBTWIN_SOURCE_PORT", &cfg.SourcePort},
+		{"DBTWIN_SOURCE_USER", &cfg.SourceUser},
+		{"DBTWIN_SOURCE_PASSWORD", &cfg.SourcePassword},
+		{"DBTWIN_SOURCE_DATABASES", &cfg.SourceDatabases},
 	}
 	for _, e := range envs {
 		if v := os.Getenv(e.name); v != "" {
@@ -96,6 +110,8 @@ func Load() (Config, bool, error) {
 }
 
 // check makes sure no setting is empty.
+// The source_* settings are not checked here: they may be empty,
+// and "refresh" checks them itself.
 func (c Config) check() error {
 	fields := map[string]string{
 		"pool":               c.Pool,
@@ -117,7 +133,13 @@ func (c Config) check() error {
 
 // Print shows the settings in use, as JSON.
 // The output can be saved as a config file.
+// The source password is shown as "***", so it never ends up on screen.
 func Print(cfg Config, fileUsed bool) error {
+	// cfg is a copy, so this doesn't change the password the caller uses
+	if cfg.SourcePassword != "" {
+		cfg.SourcePassword = "***"
+	}
+
 	if fileUsed {
 		fmt.Fprintln(os.Stderr, "config file:", configPath)
 	} else {

@@ -3,7 +3,9 @@
 package command
 
 import (
+	"bytes"
 	"fmt"
+	"os"
 	"os/exec" // running other programs like zfs and docker
 	"strings"
 )
@@ -48,4 +50,23 @@ func Succeeds(name string, args ...string) bool {
 func CombinedOutput(name string, args ...string) string {
 	out, _ := exec.Command(name, args...).CombinedOutput()
 	return strings.TrimSpace(string(out))
+}
+
+// OutputEnv runs a command with extra environment variables (like
+// "MYSQL_PWD=secret") and returns what it printed to stdout and stderr,
+// separately and as clean text.
+// Use this to pass secrets: unlike arguments, environment variables
+// don't show up in "ps" or in the "> command" line Run() prints.
+// Nothing is printed before the command runs.
+func OutputEnv(env []string, name string, args ...string) (string, string, error) {
+	cmd := exec.Command(name, args...)
+	// keep the normal environment (PATH, DOCKER_HOST, ...) and add ours;
+	// if a name is in both, the later one (ours) wins
+	cmd.Env = append(os.Environ(), env...)
+
+	var stdout, stderr bytes.Buffer
+	cmd.Stdout = &stdout
+	cmd.Stderr = &stderr
+	err := cmd.Run()
+	return strings.TrimSpace(stdout.String()), strings.TrimSpace(stderr.String()), err
 }
