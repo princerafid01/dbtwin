@@ -40,7 +40,7 @@ func Databases(cfg config.Config) []string {
 // checkSettings stops if a setting refresh needs is missing or unsafe.
 // They may be empty in general, because only refresh uses them.
 func checkSettings(cfg config.Config) error {
-	missing := []struct {
+	requiredSettings := []struct {
 		key, env, value string
 	}{
 		{"source_host", "DBTWIN_SOURCE_HOST", cfg.SourceHost},
@@ -48,7 +48,7 @@ func checkSettings(cfg config.Config) error {
 		{"source_user", "DBTWIN_SOURCE_USER", cfg.SourceUser},
 		{"source_databases", "DBTWIN_SOURCE_DATABASES", strings.Join(Databases(cfg), ",")},
 	}
-	for _, m := range missing {
+	for _, m := range requiredSettings {
 		if m.value == "" {
 			return fmt.Errorf("setting %q is empty. Set it in the config file or with %s.", m.key, m.env)
 		}

@@ -61,18 +61,18 @@ func Load() (Config, bool, error) {
 	fileUsed := false
 	data, err := os.ReadFile(configPath)
 	switch {
-	case err == nil:
-		fileUsed = true
-		// decoding into cfg only changes the keys that are in the file;
-		// every other field keeps its default
-		dec := json.NewDecoder(bytes.NewReader(data))
-		dec.DisallowUnknownFields() // catch typos like "mysql_imgae"
-		if err := dec.Decode(&cfg); err != nil {
-			return cfg, fileUsed, fmt.Errorf("config file %s is invalid: %v", configPath, err)
-		}
-	case errors.Is(err, os.ErrNotExist):
+		case err == nil:
+			fileUsed = true
+			// decoding into cfg only changes the keys that are in the file;
+			// every other field keeps its default
+			dec := json.NewDecoder(bytes.NewReader(data))
+			dec.DisallowUnknownFields() // catch typos like "mysql_imgae"
+			if err := dec.Decode(&cfg); err != nil {
+				return cfg, fileUsed, fmt.Errorf("config file %s is invalid: %v", configPath, err)
+			}
+		case errors.Is(err, os.ErrNotExist):
 		// no config file is fine, keep the defaults
-	default:
+		default:
 		// the file exists but can't be read (e.g. no permission)
 		return cfg, fileUsed, fmt.Errorf("can't read config file %s: %v", configPath, err)
 	}

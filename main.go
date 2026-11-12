@@ -34,22 +34,22 @@ func main() {
 	// "unknown command" or the usage line, not a startup check error
 	name := "" // not "branch", which is the package name
 	switch command {
-	case "list", "config":
-	case "create", "delete":
-		if len(os.Args) < 3 {
-			fmt.Println("usage: dbtwin", command, "<name>")
+		case "list", "config":
+		case "create", "delete":
+			if len(os.Args) < 3 {
+				fmt.Println("usage: dbtwin", command, "<name>")
+				os.Exit(1)
+			}
+			name = os.Args[2]
+		case "refresh":
+			// only the connection check exists so far, copying data comes later
+			if len(os.Args) < 3 || os.Args[2] != "--check" {
+				fmt.Println("usage: dbtwin refresh --check (copying data is not supported yet)")
+				os.Exit(1)
+			}
+		default:
+			fmt.Println("unknown command:", command)
 			os.Exit(1)
-		}
-		name = os.Args[2]
-	case "refresh":
-		// only the connection check exists so far, copying data comes later
-		if len(os.Args) < 3 || os.Args[2] != "--check" {
-			fmt.Println("usage: dbtwin refresh --check (copying data is not supported yet)")
-			os.Exit(1)
-		}
-	default:
-		fmt.Println("unknown command:", command)
-		os.Exit(1)
 	}
 
 	// load settings before doing anything, so a bad config stops us early
@@ -69,16 +69,16 @@ func main() {
 	}
 
 	switch command {
-	case "list":
-		err = branch.List(cfg)
-	case "config":
-		err = config.Print(cfg, fileUsed)
-	case "create":
-		err = branch.Create(cfg, name)
-	case "delete":
-		err = branch.Delete(cfg, name)
-	case "refresh":
-		err = source.PrintCheck(cfg)
+		case "list":
+			err = branch.List(cfg)
+		case "config":
+			err = config.Print(cfg, fileUsed)
+		case "create":
+			err = branch.Create(cfg, name)
+		case "delete":
+			err = branch.Delete(cfg, name)
+		case "refresh":
+			err = source.PrintCheck(cfg)
 	}
 
 	if err != nil {
