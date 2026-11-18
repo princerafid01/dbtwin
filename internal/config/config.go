@@ -8,6 +8,7 @@ import (
 	"errors"
 	"fmt"
 	"os"
+	"path/filepath"
 )
 
 // configPath is where dbtwin looks for its optional config file.
@@ -61,18 +62,18 @@ func Load() (Config, bool, error) {
 	fileUsed := false
 	data, err := os.ReadFile(configPath)
 	switch {
-		case err == nil:
-			fileUsed = true
-			// decoding into cfg only changes the keys that are in the file;
-			// every other field keeps its default
-			dec := json.NewDecoder(bytes.NewReader(data))
-			dec.DisallowUnknownFields() // catch typos like "mysql_imgae"
-			if err := dec.Decode(&cfg); err != nil {
-				return cfg, fileUsed, fmt.Errorf("config file %s is invalid: %v", configPath, err)
-			}
-		case errors.Is(err, os.ErrNotExist):
-		// no config file is fine, keep the defaults
-		default:
+	case err == nil:
+		fileUsed = true
+		// decoding into cfg only changes the keys that are in the file;
+		// every other field keeps its default
+		dec := json.NewDecoder(bytes.NewReader(data))
+		dec.DisallowUnknownFields() // catch typos like "mysql_imgae"
+		if err := dec.Decode(&cfg); err != nil {
+			return cfg, fileUsed, fmt.Errorf("config file %s is invalid: %v", configPath, err)
+		}
+	case errors.Is(err, os.ErrNotExist):
+	// no config file is fine, keep the defaults
+	default:
 		// the file exists but can't be read (e.g. no permission)
 		return cfg, fileUsed, fmt.Errorf("can't read config file %s: %v", configPath, err)
 	}
@@ -152,4 +153,75 @@ func Print(cfg Config, fileUsed bool) error {
 	}
 	fmt.Println(string(out))
 	return nil
+}
+
+// SaveSource writes the source_* settings from cfg into the config file.
+// Every other key already in the file is kept exactly as it is.
+// The file holds the source password, so it is written with mode 0600
+// (only root can read it).
+func SaveSource(cfg Config) error {
+	// 1. read the keys already in the file; a missing file is fine
+	settings := map[string]json.RawMessage{}
+	data, err := os.ReadFile(configPath)
+	switch {
+	case err == nil:
+		if err := json.Unmarshal(data, &settings); err != nil {
+			// don't overwrite a file we can't understand, the user would lose it
+			return fmt.Errorf("config file %s is invalid, not changing it: %v", configPath, err)
+		}
+	case errors.Is(err, os.ErrNotExist):
+	default:
+		return fmt.Errorf("can't read config file %s: %v", configPath, err)
+	}
+
+	// 2. set (or replace) only the source keys
+	source := map[string]string{
+		"source_host":      cfg.SourceHost,
+		"source_port":      cfg.SourcePort,
+		"source_user":      cfg.SourceUser,
+		"source_password":  cfg.SourcePassword,
+		"source_databases": cfg.SourceDatabases,
+	}
+	for key, value := range source {
+		encoded, err := json.Marshal(value)
+		if err != nil {
+			return err
+		}
+		settings[key] = encoded
+	}
+
+	// 3. turn the settings into nicely formatted JSON text
+	out, err := json.MarshalIndent(settings, "", "  ")
+	if err != nil {
+		return err
+	}
+	out = append(out, '\n')
+
+	// create /etc/dbtwin if needed
+	dir := filepath.Dir(configPath)
+	if err := os.MkdirAll(dir, 0755); err != nil {
+		return fmt.Errorf("can't create %s: %v", dir, err)
+	}
+
+	// 4. write a temporary file; CreateTemp always uses mode 0600
+	tmp, err := os.CreateTemp(dir, ".config-*.json")
+	if err != nil {
+		return fmt.Errorf("can't write config file in %s: %v", dir, err)
+	}
+	defer os.Remove(tmp.Name()) // cleans up if we stop early; harmless after the rename
+
+	if _, err := tmp.Write(out); err != nil {
+		tmp.Close()
+		return fmt.Errorf("can't write config file: %v", err)
+	}
+	if err := tmp.Close(); err != nil {
+		return fmt.Errorf("can't write config file: %v", err)
+	}
+
+	// 5. swap the new file in place of the old one
+	if err := os.Rename(tmp.Name(), configPath); err != nil {
+		return fmt.Errorf("can't save config file %s: %v", configPath, err)
+	}
+	return nil
+
 }

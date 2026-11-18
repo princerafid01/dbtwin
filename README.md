@@ -45,7 +45,7 @@ If any step fails, dbtwin undoes what it already did (container, clone, snapshot
 - Linux
 - ZFS (a pool named `tank` by default; configurable)
 - Docker
-- Go 1.24+
+- Go 1.26+
 - Root access (for `zfs` and `docker`)
 
 ## Quick start
@@ -129,7 +129,7 @@ Example `/etc/dbtwin/config.json`:
 
 `branch_memory` is the Docker memory limit for each branch container (`docker run --memory`). `branch_buffer_pool` is the InnoDB buffer pool size for each branch; keep it well below `branch_memory`. Branch containers also run with the performance schema off to save RAM. These limits apply only to branches, not to your main MySQL container.
 
-The `source_*` settings describe the MySQL server that `dbtwin refresh` copies from. Only `refresh` uses them, so they may stay empty otherwise. `source_databases` is a comma-separated list, e.g. `"shop,blog"`. `dbtwin config` shows `source_password` as `***`.
+The `source_*` settings describe the MySQL server that `dbtwin refresh` copies from. Only `refresh` uses them, so they may stay empty otherwise. The easiest way to set them is `dbtwin connect` (see [Save the source server](#save-the-source-server)). `source_databases` is a comma-separated list, e.g. `"shop,blog"`. `dbtwin config` shows `source_password` as `***`.
 
 If you change `pool`, also set `main_dataset` and `branch_prefix` to match.
 
@@ -191,6 +191,38 @@ $ sudo dbtwin delete pr-42
 > zfs [destroy tank/mysql-pr-42]
 > zfs [destroy tank/mysql-main@pr-42]
 ```
+
+### Save the source server
+
+```console
+$ sudo dbtwin connect --host db.example.com --user dbtwin --databases shop,blog
+source password:
+connected to db.example.com:3306 as dbtwin
+DATABASE                  SIZE (MB)
+shop                         812.4
+blog                          35.0
+source settings saved. Run "dbtwin refresh --check" to test them again later.
+```
+
+| Flag          | Required | Default | Meaning                                   |
+|---------------|----------|---------|-------------------------------------------|
+| `--host`      | yes      |         | host of the source MySQL server           |
+| `--port`      | no       | `3306`  | port of the source MySQL server           |
+| `--user`      | yes      |         | MySQL user to read the source with        |
+| `--databases` | yes      |         | comma-separated list, e.g. `shop,blog`    |
+
+The password is asked for with a hidden prompt, so it never appears on screen or in your shell history. In scripts, set `DBTWIN_SOURCE_PASSWORD` instead and nothing is asked.
+
+`connect` first runs the same check as `refresh --check` (below). If the check fails, nothing is saved and you see why. If it passes, the `source_*` settings are written to `/etc/dbtwin/config.json`:
+
+- your other settings in the file are kept
+- `/etc/dbtwin` is created if it doesn't exist
+- the file gets permissions `0600`, so only root can read it, because it contains the password
+- the file is replaced in one step, so a crash never leaves a half-written config
+
+`connect` saves exactly what you give it: a missing `--port` means `3306`, even if `DBTWIN_SOURCE_PORT` is set. The other `DBTWIN_SOURCE_*` variables are ignored too, except `DBTWIN_SOURCE_PASSWORD`.
+
+To test the saved settings again later, run `dbtwin refresh --check`.
 
 ### Check the source server
 
