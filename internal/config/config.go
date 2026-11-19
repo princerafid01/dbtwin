@@ -26,8 +26,8 @@ type Config struct {
 	BranchMemory     string `json:"branch_memory"`      // memory limit for each branch container, e.g. 512m
 	BranchBufferPool string `json:"branch_buffer_pool"` // InnoDB buffer pool size for each branch, e.g. 128M
 
-	// the source MySQL server that "dbtwin refresh" copies from.
-	// these may be empty; only "refresh" needs them.
+	// the source MySQL server that dbtwin copies from.
+	// these may be empty; only "connect" (and later "refresh") needs them.
 	SourceHost      string `json:"source_host"`      // host of the source MySQL server
 	SourcePort      string `json:"source_port"`      // port of the source MySQL server
 	SourceUser      string `json:"source_user"`      // MySQL user to read the source with
@@ -112,7 +112,7 @@ func Load() (Config, bool, error) {
 
 // check makes sure no setting is empty.
 // The source_* settings are not checked here: they may be empty,
-// and "refresh" checks them itself.
+// and the source package checks them itself when they are used.
 func (c Config) check() error {
 	fields := map[string]string{
 		"pool":               c.Pool,

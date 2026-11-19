@@ -12,9 +12,14 @@ import (
 	"github.com/princerafid01/dbtwin/internal/source"
 )
 
+// connectUsage is shown when the "dbtwin connect" flags are wrong.
+const connectUsage = "usage: dbtwin connect --host <host> --user <user> --databases <db1,db2> [--port 3306]\n" +
+	"       dbtwin connect --test"
+
 // connectFlags are the settings given to "dbtwin connect".
 type connectFlags struct {
 	host, port, user, databases string
+	test                        bool // --test: re-test the saved settings, save nothing
 }
 
 // parseConnectFlags reads the "dbtwin connect" flags and stops with the
@@ -26,10 +31,27 @@ func parseConnectFlags(args []string) connectFlags {
 	fs.StringVar(&f.port, "port", "3306", "port of the source MySQL server")
 	fs.StringVar(&f.user, "user", "", "MySQL user to read the source with (required)")
 	fs.StringVar(&f.databases, "databases", "", "comma-separated databases, e.g. shop,blog (required)")
+	fs.BoolVar(&f.test, "test", false, "re-test the saved source settings, change nothing")
 	fs.Parse(args) // on an unknown flag this prints the error and the help, then exits
 
-	if fs.NArg() > 0 || f.host == "" || f.user == "" || f.databases == "" {
-		fmt.Println("usage: dbtwin connect --host <host> --user <user> --databases <db1,db2> [--port 3306]")
+	if fs.NArg() > 0 {
+		fmt.Println(connectUsage)
+		os.Exit(1)
+	}
+
+	// --test uses the saved settings, so other flags would be ignored;
+	// stop instead, so nobody thinks "--test --host db2" tests db2
+	if f.test {
+		if fs.NFlag() > 1 {
+			fmt.Println("connect --test uses the saved settings and takes no other flags")
+			fmt.Println(connectUsage)
+			os.Exit(1)
+		}
+		return f
+	}
+
+	if f.host == "" || f.user == "" || f.databases == "" {
+		fmt.Println(connectUsage)
 		os.Exit(1)
 	}
 	return f
@@ -50,15 +72,32 @@ func runConnect(cfg config.Config, f connectFlags) error {
 	}
 	cfg.SourcePassword = password
 
-	// the same check as "refresh --check"; if it fails, nothing is saved
+	// the same check as "connect --test"; if it fails, nothing is saved
 	if err := source.PrintCheck(cfg); err != nil {
 		return err
 	}
 	if err := config.SaveSource(cfg); err != nil {
 		return err
 	}
-	fmt.Println("source settings saved. Run \"dbtwin refresh --check\" to test them again later.")
+	printSaved(cfg)
 	return nil
+}
+
+// printSaved shows the source settings that were just saved.
+// The password is shown as "***", so it never ends up on screen.
+func printSaved(cfg config.Config) {
+	password := "(empty)"
+	if cfg.SourcePassword != "" {
+		password = "***"
+	}
+	fmt.Println()
+	fmt.Println("saved source settings:")
+	fmt.Println("  host:      ", cfg.SourceHost)
+	fmt.Println("  port:      ", cfg.SourcePort)
+	fmt.Println("  user:      ", cfg.SourceUser)
+	fmt.Println("  password:  ", password)
+	fmt.Println("  databases: ", cfg.SourceDatabases)
+	fmt.Println(`Run "dbtwin connect --test" to test them again later.`)
 }
 
 // sourcePassword returns DBTWIN_SOURCE_PASSWORD if it is set,

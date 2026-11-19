@@ -1,5 +1,6 @@
-// Package source talks to the source MySQL server that "dbtwin refresh"
-// copies from. For now it only checks the connection and the databases.
+// Package source talks to the source MySQL server that dbtwin copies from.
+// For now it only checks the connection and the databases
+// ("dbtwin connect" and "dbtwin connect --test").
 package source
 
 import (
@@ -37,8 +38,8 @@ func Databases(cfg config.Config) []string {
 	return list
 }
 
-// checkSettings stops if a setting refresh needs is missing or unsafe.
-// They may be empty in general, because only refresh uses them.
+// checkSettings stops if a source setting is missing or unsafe.
+// They may be empty in general, because only the source commands use them.
 func checkSettings(cfg config.Config) error {
 	requiredSettings := []struct {
 		key, env, value string
