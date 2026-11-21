@@ -68,7 +68,9 @@ sudo docker run -d \
   mysql:8.4
 ```
 
-Load your data into it. Every branch starts as a copy of this database and uses the same users and passwords.
+Every branch starts as a copy of this database and uses the same users and passwords. Fill it with `dbtwin refresh` (see [Refresh main](#refresh-main)), or load your data into it yourself.
+
+Keep `MYSQL_ROOT_PASSWORD` the same as root's real password: `dbtwin refresh` logs in to main with it.
 
 **3. Install dbtwin:**
 
@@ -104,6 +106,7 @@ Settings are loaded in this order (later wins):
 |----------------------|-------------------|-----------------------------|
 | `pool`               | `tank`            | `DBTWIN_POOL`               |
 | `main_dataset`       | `tank/mysql-main` | `DBTWIN_MAIN_DATASET`       |
+| `main_container`     | `mysql-main`      | `DBTWIN_MAIN_CONTAINER`     |
 | `branch_prefix`      | `tank/mysql-`     | `DBTWIN_BRANCH_PREFIX`      |
 | `container_prefix`   | `mysql-`          | `DBTWIN_CONTAINER_PREFIX`   |
 | `mysql_image`        | `mysql:8.4`       | `DBTWIN_MYSQL_IMAGE`        |
@@ -130,6 +133,8 @@ Example `/etc/dbtwin/config.json`:
 `branch_memory` is the Docker memory limit for each branch container (`docker run --memory`). `branch_buffer_pool` is the InnoDB buffer pool size for each branch; keep it well below `branch_memory`. Branch containers also run with the performance schema off to save RAM. These limits apply only to branches, not to your main MySQL container.
 
 The `source_*` settings describe the MySQL server that dbtwin copies from. They may stay empty until you use it. The easiest way to set them is `dbtwin connect` (see [Connect your database](#connect-your-database)). `source_databases` is a comma-separated list, e.g. `"shop,blog"`. `dbtwin config` shows `source_password` as `***`.
+
+`main_container` is the name of your main MySQL container. Only `dbtwin refresh` uses it.
 
 If you change `pool`, also set `main_dataset` and `branch_prefix` to match.
 
@@ -200,7 +205,50 @@ blog                          35.0
 
 Both commands connect with a throwaway `mysql_image` container (`docker run --rm --network host`), so you don't need a MySQL client on the host. The password is passed only through the `MYSQL_PWD` environment variable, never on a command line. Sizes are data plus indexes, from `information_schema.tables`.
 
-Copying the data from the source (`dbtwin refresh`) is not implemented yet.
+`source_databases` can't include MySQL's own databases (`mysql`, `sys`, `information_schema`, `performance_schema`).
+
+## Refresh main
+
+`dbtwin refresh` replaces the data in main with a fresh copy of the source databases.
+
+```console
+$ sudo dbtwin refresh
+connected to db.example.com:3306 as dbtwin
+DATABASE                  SIZE (MB)
+shop                         812.4
+blog                          35.0
+> zfs [snapshot tank/mysql-main@before-refresh]
+dropping the old copies in main: shop, blog
+copied 790 MB
+> zfs [destroy tank/mysql-main@before-refresh]
+main now has a fresh copy of: shop, blog
+```
+
+What it does:
+
+1. **Checks** the source connection, the main container, the root login to main and the free disk space. If a check fails, nothing is changed.
+2. **Takes a backup**: the snapshot `main@before-refresh`.
+3. **Drops** each source database in main, so tables that were removed on the source don't stay behind. Other databases in main are not touched.
+4. **Copies** the data with `mysqldump`, streamed straight into main's `mysql`. Nothing is written to a file on disk.
+5. **Deletes the backup** when the copy is complete.
+
+Existing branches don't change. They keep the data they were created with. Branches created after the refresh get the new data.
+
+### Safety
+
+- **Production is only read.** `mysqldump` runs with `--single-transaction`, so InnoDB tables are copied consistently and without locks. MyISAM tables are not protected by this and can be copied in an inconsistent state.
+- **A failed refresh is undone.** If any step after the backup fails, dbtwin stops main's container, rolls main back to the backup with `zfs rollback`, and starts it again. Main is then exactly as it was before the refresh. This covers a failed dump or load, and a dump that stopped before its last line (`-- Dump completed`).
+- **Ctrl+C is safe.** It stops the copy and rolls main back. Don't press it again while the rollback runs.
+- **One command at a time.** While a refresh runs, `create`, `delete` and a second `refresh` stop with "another dbtwin command is running".
+- **After a crash** (power loss, `kill -9`), the backup snapshot stays behind and main may be half-loaded. The next refresh stops and shows the commands to roll main back by hand.
+
+### Requirements
+
+- **The main container must be running**, with its data in `main_dataset`. dbtwin checks both.
+- **Root's password in main must match `MYSQL_ROOT_PASSWORD`.** dbtwin logs in to main with the container's own `MYSQL_ROOT_PASSWORD`, so it never needs the password itself. MySQL reads that variable only when the container is first set up. If root's password was changed later, the login fails: recreate the container with the current password.
+- **Free disk space at least the size of the source databases.** The old data stays in the backup until the copy is complete. dbtwin checks this before it starts. The source size is a careful guess: compression usually makes the copy smaller.
+- **The source user needs** `SELECT`, `SHOW VIEW`, `TRIGGER`, `EVENT` and `SHOW_ROUTINE` (MySQL 8.0.20 and later) on the source databases. dbtwin dumps tables, views, triggers, events, stored procedures and functions. It doesn't need `PROCESS` or `RELOAD`.
+- Sources with GTID turned on (for example Amazon RDS) work: the dump leaves out the GTID line.
 
 ## Usage
 
@@ -252,14 +300,15 @@ $ sudo dbtwin delete pr-42
 ⚠️ **Early prototype. Not production-ready.**
 
 - The snapshot is taken while main MySQL is running, so each branch starts from a crash-consistent copy that InnoDB recovers on startup.
-- Main is a MySQL you load yourself. Syncing it from production is on the roadmap.
+- `dbtwin refresh` copies everything each time with a full dump. Large databases take a while.
 - Expect breaking changes.
 
 ## Roadmap
 
 - **GitHub App**: create a branch when a PR opens, delete it when the PR closes
 - **Data masking**: hide sensitive data (emails, names, tokens) in branches
-- **Production sync**: refresh main from production with dumps, then binlog CDC
+- **Refresh versions**: keep the last few refreshes as snapshots, and create branches from the newest one
+- **Production sync**: keep main up to date from the binlog (CDC) instead of full dumps
 - **Migration checks**: run migrations on the branch and report problems on the PR
 - **Scale-to-zero**: stop idle branch containers and start them again on demand
 

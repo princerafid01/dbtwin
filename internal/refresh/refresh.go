@@ -4,14 +4,22 @@
 // (main.go has already locked dbtwin)
 // check the source and main -> safety snapshot ->
 // drop the old databases -> dump and load -> remove the safety snapshot.
-// If any step after the safety snapshot fails, main is rolled back to it.
+// If any step after the safety snapshot fails, or the user presses Ctrl+C,
+// main is rolled back to it.
 package refresh
 
 import (
+	"bytes"
+	"context"
 	"errors"
 	"fmt"
+	"io"
+	"os"
+	"os/exec"
+	"os/signal"
 	"path/filepath"
 	"strings"
+	"syscall"
 	"time"
 
 	"github.com/princerafid01/dbtwin/internal/config"
@@ -20,15 +28,40 @@ import (
 	"github.com/princerafid01/dbtwin/internal/zfs"
 )
 
+// progress passes data through unchanged and prints how much has gone by.
+type progress struct {
+	r       io.Reader // where the data comes from (mysqldump's output)
+	total   int64     // bytes passed so far
+	printed int64     // total at the last print
+	tail    []byte    // the last 256 bytes that passed, to check how the dump ended
+}
+
+// Read is called by io.Copy in dumpAndLoad, once per chunk.
+func (p *progress) Read(buf []byte) (int, error) {
+	n, err := p.r.Read(buf) // 1. get data from mysqldump
+	p.total += int64(n)
+
+	// remember the last 256 bytes, to check later how the dump ended
+	p.tail = append(p.tail, buf[:n]...)
+	if len(p.tail) > 256 {
+		p.tail = p.tail[len(p.tail)-256:]
+	}
+
+	if p.total-p.printed >= 10*1024*1024 {
+		fmt.Printf("\rcopied %d MB…", p.total>>20)
+		p.printed = p.total
+	}
+	return n, err
+}
+
 // safetyName is the safety snapshot, e.g. tank/mysql-main@before-refresh.
 // It only exists while a refresh is running.
 func safetyName(cfg config.Config) string {
 	return cfg.MainDataset + "@before-refresh"
 }
 
-// errNotBuilt is returned at the end of Run until every step is built,
-// so a refresh that copied nothing never reports success.
-var errNotBuilt = errors.New("refresh is not finished yet: the data was not copied")
+// errStopped is returned when the user stops the refresh (Ctrl+C).
+var errStopped = errors.New("refresh was stopped (Ctrl+C)")
 
 // Run copies the source databases into main.
 func Run(cfg config.Config) (err error) {
@@ -54,6 +87,23 @@ func Run(cfg config.Config) (err error) {
 		return err
 	}
 
+	// CATCH Ctrl+C
+	// before this point, Ctrl+C just ends dbtwin: nothing was changed yet.
+	// from here on, Ctrl+C (or "kill") must not end dbtwin at once, or main
+	// would stay half-loaded. instead it cancels ctx: the running step
+	// stops, it returns an error, and the rollback below runs.
+	// this defer is set up before the rollback's, so it runs after it:
+	// Ctrl+C stays caught until the rollback is done.
+	ctx, stopCatching := signal.NotifyContext(context.Background(), os.Interrupt, syscall.SIGTERM)
+	defer stopCatching()
+	// stopped returns errStopped once the user has pressed Ctrl+C
+	stopped := func() error {
+		if ctx.Err() != nil {
+			return errStopped
+		}
+		return nil
+	}
+
 	// SAFETY NET
 	if err := safetySnapshot(cfg); err != nil {
 		return err
@@ -65,7 +115,8 @@ func Run(cfg config.Config) (err error) {
 	loaded := false
 	defer func() {
 		if err != nil && !loaded {
-			fmt.Println("refresh failed, rolling main back...")
+			fmt.Println()
+			fmt.Println("refresh failed, rolling main back. Please wait, don't stop dbtwin now...")
 			if rbErr := rollback(cfg); rbErr != nil {
 				err = fmt.Errorf("%v\nrollback ALSO failed: %v", err, rbErr)
 			}
@@ -77,16 +128,24 @@ func Run(cfg config.Config) (err error) {
 	if err := dropDatabases(cfg); err != nil {
 		return err
 	}
-	if err := dumpAndLoad(cfg); err != nil {
+	if err := stopped(); err != nil {
 		return err
 	}
+	if err := dumpAndLoad(ctx, cfg); err != nil {
+		return err
+	}
+	if err := stopped(); err != nil {
+		return err
+	}
+	// from here on the new data is good; Ctrl+C no longer undoes it
 	loaded = true
 
 	// FINISH
 	if err := removeSafety(cfg); err != nil {
 		return err
 	}
-	return errNotBuilt
+	fmt.Printf("main now has a fresh copy of: %s\n", strings.Join(source.Databases(cfg), ", "))
+	return nil
 }
 
 // checkMain makes sure refresh will load into the right MySQL:
@@ -234,9 +293,168 @@ func dropDatabases(cfg config.Config) error {
 	return nil
 }
 
-// dumpAndLoad streams mysqldump from the source straight into main,
-// showing progress, and checks the dump really finished.
-func dumpAndLoad(cfg config.Config) error { return nil }
-
 // removeSafety deletes main@before-refresh after a good load.
-func removeSafety(cfg config.Config) error { return nil }
+// If this fails, the new data is still good: we only tell the user
+// how to delete the backup, so the next refresh is not blocked.
+func removeSafety(cfg config.Config) error {
+	snap := safetyName(cfg)
+	if err := zfs.Destroy(snap); err != nil {
+		return fmt.Errorf("the new data is loaded, but the backup %s could not be deleted: %v\n"+
+			"Delete it with: zfs destroy %s", snap, err, snap)
+	}
+	return nil
+}
+
+// dumpContainer is the name of the throwaway mysqldump container,
+// e.g. dbtwin-dump-4121 (with dbtwin's process id, so it is unique).
+func dumpContainer() string {
+	return fmt.Sprintf("dbtwin-dump-%d", os.Getpid())
+}
+
+// stopDump stops mysqldump for good. Killing the "docker run" command is
+// not enough: the container it started keeps running, and would keep
+// reading from the source. So the container is removed too.
+// Errors are ignored on purpose: it may already be gone.
+func stopDump(dump *exec.Cmd) {
+	dump.Process.Kill()
+	exec.Command("docker", "rm", "-f", dumpContainer()).Run()
+}
+
+// dumpCmd builds the mysqldump command that reads the source databases.
+// It runs in a throwaway container, so the host needs no mysqldump.
+// The password goes in MYSQL_PWD, so it never shows up in "ps".
+func dumpCmd(cfg config.Config) *exec.Cmd {
+	args := []string{"run", "--rm",
+		"--name", dumpContainer(), // so stopDump can remove it by name
+		"--log-driver", "none", // never store the dump in Docker's logs
+		"--network", "host", // so 127.0.0.1 means this machine, not the container
+		"-e", "MYSQL_PWD", // the value comes from cmd.Env below
+		cfg.MySQLImage,
+		"mysqldump",
+		"--protocol", "TCP",
+		"-h", cfg.SourceHost,
+		"-P", cfg.SourcePort,
+		"-u", cfg.SourceUser,
+		"--single-transaction",  // consistent copy, no locks on production (InnoDB)
+		"--quick",               // send rows one by one, don't hold tables in memory
+		"--routines",            // include stored procedures and functions
+		"--triggers",            // include triggers
+		"--events",              // include scheduled events
+		"--no-tablespaces",      // avoids needing the PROCESS privilege
+		"--set-gtid-purged=OFF", // a GTID line would make the load fail in main
+		"--databases",           // adds CREATE DATABASE and USE for each one
+	}
+	for _, db := range source.Databases(cfg) {
+		args = append(args, db)
+	}
+
+	cmd := exec.Command("docker", args...)
+	// always set it, even when empty, so a MYSQL_PWD in the user's shell is never sent
+	cmd.Env = append(os.Environ(), "MYSQL_PWD="+cfg.SourcePassword)
+	return cmd
+}
+
+// loadCmd builds the mysql command that loads SQL from stdin into main.
+// It runs inside main's container and uses the container's own root
+// password, so dbtwin never sees it.
+func loadCmd(cfg config.Config) *exec.Cmd {
+	script := `MYSQL_PWD="$MYSQL_ROOT_PASSWORD" exec mysql -uroot`
+	return exec.Command("docker", "exec", "-i", cfg.MainContainer, "sh", "-c", script)
+}
+
+// dumpAndLoad streams mysqldump from the source straight into main,
+// showing progress. Both commands must succeed.
+// When ctx is cancelled (Ctrl+C), both commands are killed.
+func dumpAndLoad(ctx context.Context, cfg config.Config) error {
+	dump := dumpCmd(cfg)
+	load := loadCmd(cfg)
+
+	fromDump, err := dump.StdoutPipe() // mysqldump's output comes out here
+	if err != nil {
+		return err
+	}
+	toLoad, err := load.StdinPipe() // mysql's input goes in here
+	if err != nil {
+		return err
+	}
+	p := &progress{r: fromDump} // counts everything read from mysqldump
+
+	// keep each command's error messages, to show them if it fails
+	var dumpErr, loadErr bytes.Buffer
+	dump.Stderr = &dumpErr
+	load.Stderr = &loadErr
+
+	if err = dump.Start(); err != nil {
+		return fmt.Errorf("can't start mysqldump: %v", err)
+	}
+
+	if err := load.Start(); err != nil {
+		stopDump(dump)
+		dump.Wait()
+		return fmt.Errorf("can't start mysql in main: %v", err)
+	}
+
+	// on Ctrl+C, kill both: the copy below then ends with an error
+	stopWatching := context.AfterFunc(ctx, func() {
+		stopDump(dump)
+		load.Process.Kill()
+	})
+	defer stopWatching()
+
+	// THE COPY: io.Copy loops by itself, chunk by chunk:
+	// read a chunk from p (mysqldump, counted) -> write it to mysql -> repeat,
+	// until mysqldump has nothing left, or mysql stops taking data
+	_, copyErr := io.Copy(toLoad, p)
+	toLoad.Close() // tell mysql: "no more data coming"
+
+	// if mysql stopped early, mysqldump has nobody to write to: stop it
+	if copyErr != nil {
+		stopDump(dump)
+	}
+
+	// wait until both have really exited, and get how each one ended.
+	// the copy is already over, so the order doesn't matter here
+	loadResponse := load.Wait()
+	dumpResponse := dump.Wait()
+	fmt.Printf("\rcopied %d MB\n", p.total>>20) // final total, on its own line
+
+	// stopped by the user: say so, instead of the "killed" errors that follow
+	if ctx.Err() != nil {
+		return errStopped
+	}
+
+	// mysql in main failed: the load is incomplete, so Run will roll back
+	if loadResponse != nil {
+		return loadError(loadResponse, loadErr.String(), dumpErr.String())
+	}
+
+	// mysql succeeded, but that alone proves nothing: if mysqldump died
+	// half-way, mysql just sees the data end and exits OK with half of it
+	// loaded. so mysqldump must have succeeded too
+	if dumpResponse != nil {
+		return dumpError(dumpResponse, dumpErr.String())
+	}
+
+	// both succeeded, but a dump can still stop early without an error.
+	// a complete dump always ends with "-- Dump completed", so check for it
+	if !bytes.Contains(p.tail, []byte("-- Dump completed")) {
+		return errors.New("the dump ended early: its last line \"-- Dump completed\" never arrived")
+	}
+	return nil
+}
+
+// loadError explains why loading into main failed, with what mysql printed.
+// A dump that broke half-way can make mysql fail with a confusing syntax
+// error, so what mysqldump printed is added too, if it printed anything.
+func loadError(res error, loadMsg, dumpMsg string) error {
+	msg := fmt.Sprintf("loading into main failed: %v\n%s", res, loadMsg)
+	if dumpMsg != "" {
+		msg += "\nmysqldump said:\n" + dumpMsg
+	}
+	return errors.New(msg)
+}
+
+// dumpError explains why mysqldump failed, with what it printed.
+func dumpError(res error, dumpMsg string) error {
+	return fmt.Errorf("mysqldump from source failed: %v\n%s", res, dumpMsg)
+}
