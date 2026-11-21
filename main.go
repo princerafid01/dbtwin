@@ -7,6 +7,8 @@ import (
 	"github.com/princerafid01/dbtwin/internal/branch"
 	"github.com/princerafid01/dbtwin/internal/check"
 	"github.com/princerafid01/dbtwin/internal/config"
+	"github.com/princerafid01/dbtwin/internal/lock"
+	"github.com/princerafid01/dbtwin/internal/refresh"
 	"github.com/princerafid01/dbtwin/internal/source"
 )
 
@@ -38,17 +40,13 @@ func main() {
 	var connectArgs connectFlags // the --host, --port... values, only used by "connect"
 
 	switch command {
-	case "list", "config":
+	case "list", "config", "refresh":
 	case "create", "delete":
 		if len(os.Args) < 3 {
 			fmt.Println("usage: dbtwin", command, "<name>")
 			os.Exit(1)
 		}
 		name = os.Args[2]
-	case "refresh":
-		// the name is kept for copying data, which is not built yet
-		fmt.Println("refresh is not implemented yet")
-		os.Exit(1)
 	case "connect":
 		// stops with the usage line if --host, --user or --databases is missing,
 		// or if --test is mixed with other flags
@@ -75,6 +73,20 @@ func main() {
 		}
 	}
 
+	// only one command that changes branches or main runs at a time.
+	// os.Exit below skips the deferred release, which is fine: the kernel
+	// drops the lock as soon as dbtwin ends, however it ends.
+	// the defer is still needed: it keeps the lock file open. without it,
+	// Go's garbage collector could close the file mid-command and drop the lock.
+	if command == "create" || command == "delete" || command == "refresh" {
+		release, err := lock.Take()
+		if err != nil {
+			fmt.Println(err)
+			os.Exit(1)
+		}
+		defer release()
+	}
+
 	switch command {
 	case "list":
 		err = branch.List(cfg)
@@ -84,10 +96,12 @@ func main() {
 		err = branch.Create(cfg, name)
 	case "delete":
 		err = branch.Delete(cfg, name)
+	case "refresh":
+		err = refresh.Run(cfg)
 	case "connect":
 		if connectArgs.test {
 			// re-test the saved settings; changes nothing
-			err = source.PrintCheck(cfg)
+			_, err = source.PrintCheck(cfg)
 		} else {
 			err = runConnect(cfg, connectArgs)
 		}

@@ -23,6 +23,14 @@ type Database struct {
 // Database names go into a SQL query, so this keeps the query safe.
 var validDatabase = regexp.MustCompile(`^[A-Za-z0-9_$-]{1,64}$`)
 
+// systemDatabases are MySQL's own databases. They are never copied.
+var systemDatabases = map[string]bool{
+	"mysql":              true,
+	"sys":                true,
+	"information_schema": true,
+	"performance_schema": true,
+}
+
 // validPort allows only a port number, e.g. 3306.
 var validPort = regexp.MustCompile(`^[0-9]{1,5}$`)
 
@@ -61,6 +69,11 @@ func checkSettings(cfg config.Config) error {
 	for _, name := range Databases(cfg) {
 		if !validDatabase.MatchString(name) {
 			return fmt.Errorf("invalid database name %q in source_databases: use only letters, numbers, _, $ and - (max 64 characters)", name)
+		}
+		// refresh drops each source database in main before loading it;
+		// dropping one of these would break main (e.g. "mysql" holds its users)
+		if systemDatabases[strings.ToLower(name)] {
+			return fmt.Errorf("source_databases can't include %q: it is one of MySQL's own databases", name)
 		}
 	}
 	return nil
@@ -183,10 +196,11 @@ func Check(cfg config.Config) ([]Database, error) {
 }
 
 // PrintCheck runs Check and prints each database with its size.
-func PrintCheck(cfg config.Config) error {
+// It also returns the databases, for callers that need the sizes.
+func PrintCheck(cfg config.Config) ([]Database, error) {
 	dbs, err := Check(cfg)
 	if err != nil {
-		return err
+		return nil, err
 	}
 
 	fmt.Printf("connected to %s:%s as %s\n", cfg.SourceHost, cfg.SourcePort, cfg.SourceUser)
@@ -194,5 +208,5 @@ func PrintCheck(cfg config.Config) error {
 	for _, db := range dbs {
 		fmt.Printf("%-24s %10.1f\n", db.Name, db.SizeMB)
 	}
-	return nil
+	return dbs, nil
 }

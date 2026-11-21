@@ -19,6 +19,7 @@ const configPath = "/etc/dbtwin/config.json"
 type Config struct {
 	Pool             string `json:"pool"`               // ZFS pool that holds everything
 	MainDataset      string `json:"main_dataset"`       // dataset with the main MySQL data
+	MainContainer    string `json:"main_container"`     // Docker container running MySQL on MainDataset
 	BranchPrefix     string `json:"branch_prefix"`      // branch datasets are BranchPrefix + name
 	ContainerPrefix  string `json:"container_prefix"`   // branch containers are ContainerPrefix + name
 	MySQLImage       string `json:"mysql_image"`        // Docker image for branch containers
@@ -40,6 +41,7 @@ func defaultConfig() Config {
 	return Config{
 		Pool:             "tank",
 		MainDataset:      "tank/mysql-main",
+		MainContainer:    "mysql-main",
 		BranchPrefix:     "tank/mysql-",
 		ContainerPrefix:  "mysql-",
 		MySQLImage:       "mysql:8.4",
@@ -85,6 +87,7 @@ func Load() (Config, bool, error) {
 	}{
 		{"DBTWIN_POOL", &cfg.Pool},
 		{"DBTWIN_MAIN_DATASET", &cfg.MainDataset},
+		{"DBTWIN_MAIN_CONTAINER", &cfg.MainContainer},
 		{"DBTWIN_BRANCH_PREFIX", &cfg.BranchPrefix},
 		{"DBTWIN_CONTAINER_PREFIX", &cfg.ContainerPrefix},
 		{"DBTWIN_MYSQL_IMAGE", &cfg.MySQLImage},
@@ -117,6 +120,7 @@ func (c Config) check() error {
 	fields := map[string]string{
 		"pool":               c.Pool,
 		"main_dataset":       c.MainDataset,
+		"main_container":     c.MainContainer,
 		"branch_prefix":      c.BranchPrefix,
 		"container_prefix":   c.ContainerPrefix,
 		"mysql_image":        c.MySQLImage,

@@ -3,6 +3,7 @@ package zfs
 
 import (
 	"fmt"
+	"strconv"
 	"strings"
 
 	"github.com/princerafid01/dbtwin/internal/command"
@@ -21,6 +22,13 @@ func Clone(snap, dataset string) error {
 // Destroy deletes a dataset or a snapshot.
 func Destroy(name string) error {
 	return command.Run("zfs", "destroy", name)
+}
+
+// Rollback puts a dataset back exactly as it was when snap was taken,
+// throwing away every change made since. snap must be the newest snapshot:
+// without -r, zfs refuses if a newer one exists, instead of deleting it.
+func Rollback(snap string) error {
+	return command.Run("zfs", "rollback", snap)
 }
 
 // Exists reports whether a dataset exists.
@@ -45,6 +53,20 @@ func Mountpoint(dataset string) (string, error) {
 		return "", fmt.Errorf("dataset %s has no usable mountpoint (got %q)", dataset, mp)
 	}
 	return mp, nil
+}
+
+// Available returns how many bytes a dataset can still use.
+func Available(dataset string) (int64, error) {
+	// -p = exact number in bytes, not "18.9G"
+	out, err := command.Output("zfs", "get", "-Hp", "-o", "value", "available", dataset)
+	if err != nil {
+		return 0, err
+	}
+	n, err := strconv.ParseInt(out, 10, 64)
+	if err != nil {
+		return 0, fmt.Errorf("unexpected free space %q for %s", out, dataset)
+	}
+	return n, nil
 }
 
 // Dataset is one line of "zfs list": a dataset name and its disk usage.

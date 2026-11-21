@@ -26,6 +26,17 @@ func RunMySQL(container, dataDir, hostPort, image, memory, bufferPool string) er
 	)
 }
 
+// Stop stops a container but keeps it, so it can be started again.
+// Stopping a container that is already stopped is fine.
+func Stop(container string) error {
+	return command.Run("docker", "stop", container)
+}
+
+// Start starts a stopped container again.
+func Start(container string) error {
+	return command.Run("docker", "start", container)
+}
+
 // Remove stops and deletes a container.
 func Remove(container string) error {
 	return command.Run("docker", "rm", "-f", container)
@@ -34,6 +45,44 @@ func Remove(container string) error {
 // Exists reports whether a container exists (running or not).
 func Exists(container string) bool {
 	return command.Succeeds("docker", "inspect", container)
+}
+
+// Running reports whether a container is running.
+// It returns an error if the container doesn't exist.
+func Running(container string) (bool, error) {
+	out, err := command.Output("docker", "inspect", "-f", "{{.State.Running}}", container)
+	if err != nil {
+		return false, err
+	}
+	return out == "true", nil
+}
+
+// MountSource returns the host folder mounted at dest inside the
+// container, e.g. /tank/mysql-main for /var/lib/mysql.
+// It returns "" if nothing is mounted there.
+func MountSource(container, dest string) (string, error) {
+	format := `{{range .Mounts}}{{if eq .Destination "` + dest + `"}}{{.Source}}{{end}}{{end}}`
+	return command.Output("docker", "inspect", "-f", format, container)
+}
+
+// RootSQL runs SQL in the container's MySQL as root, using the
+// container's own $MYSQL_ROOT_PASSWORD. The password goes in MYSQL_PWD,
+// not on the command line, so it never shows up in "ps".
+// The SQL is handed to sh as "$1", so the shell never reads into it.
+// On failure, the error includes what mysql printed.
+func RootSQL(container, sql string) error {
+	script := `test -n "$MYSQL_ROOT_PASSWORD" || { echo "MYSQL_ROOT_PASSWORD is not set in the container" >&2; exit 1; }
+MYSQL_PWD="$MYSQL_ROOT_PASSWORD" exec mysql -uroot -e "$1"`
+	_, stderr, err := command.OutputEnv(nil, "docker", "exec", container, "sh", "-c", script, "sh", sql)
+	if err != nil {
+		return fmt.Errorf("%v: %s", err, stderr)
+	}
+	return nil
+}
+
+// RootLogin checks that we can log in to MySQL in the container as root.
+func RootLogin(container string) error {
+	return RootSQL(container, "SELECT 1")
 }
 
 // Port returns the host address of the container's MySQL port,

@@ -73,7 +73,7 @@ func runConnect(cfg config.Config, f connectFlags) error {
 	cfg.SourcePassword = password
 
 	// the same check as "connect --test"; if it fails, nothing is saved
-	if err := source.PrintCheck(cfg); err != nil {
+	if _, err := source.PrintCheck(cfg); err != nil {
 		return err
 	}
 	if err := config.SaveSource(cfg); err != nil {
