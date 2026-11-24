@@ -250,6 +250,41 @@ Existing branches don't change. They keep the data they were created with. Branc
 - **The source user needs** `SELECT`, `SHOW VIEW`, `TRIGGER`, `EVENT` and `SHOW_ROUTINE` (MySQL 8.0.20 and later) on the source databases. dbtwin dumps tables, views, triggers, events, stored procedures and functions. It doesn't need `PROCESS` or `RELOAD`.
 - Sources with GTID turned on (for example Amazon RDS) work: the dump leaves out the GTID line.
 
+### Refresh every night
+
+To have fresh data in main every morning, let cron run the refresh at night.
+
+**1. Install dbtwin where cron can find it:**
+
+```bash
+sudo cp dbtwin /usr/local/bin/
+```
+
+**2. Create `/etc/cron.d/dbtwin`:**
+
+```
+PATH=/usr/sbin:/usr/bin:/bin
+0 3 * * * root (date; /usr/local/bin/dbtwin refresh) >> /var/log/dbtwin-refresh.log 2>&1
+```
+
+- `PATH` adds `/usr/sbin`, which cron's default leaves out. On some systems `zfs` is only there, and without this line every refresh fails with `executable file not found in $PATH`.
+- `root` because refresh needs root for `zfs` and `docker`.
+- The log is the only place to see what happened, since cron has no screen. `date` adds the time of each run.
+- `0 3 * * *` means 03:00 every day, in the server's time zone.
+
+**3. Check it the next morning:**
+
+```bash
+sudo dbtwin list                       # (main) DATA FROM should be from last night
+sudo tail -20 /var/log/dbtwin-refresh.log
+```
+
+If main's `DATA FROM` is older than last night, the refresh failed. The log says why. Common reasons:
+
+- **Another command was running.** A `create`, `delete` or `refresh` running at 03:00 makes the refresh stop with "another dbtwin command is running". Nothing changes, and it runs again the next night.
+- **A backup was left behind by a crash.** Every later refresh stops until you fix main by hand. The log shows the commands (see [Safety](#safety)).
+- **The source can't be reached** or its password changed. Test it with `dbtwin connect --test`.
+
 ## Usage
 
 If you built from source, use `./dbtwin` instead of `dbtwin`.
