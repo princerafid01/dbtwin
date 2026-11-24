@@ -1,5 +1,5 @@
 // Package lock makes sure only one dbtwin command that changes things
-// (create, delete, refresh) runs at a time.
+// (create, delete, reset, refresh) runs at a time.
 package lock
 
 import (
@@ -31,7 +31,7 @@ func Take() (release func(), err error) {
 	if err := syscall.Flock(int(f.Fd()), syscall.LOCK_EX|syscall.LOCK_NB); err != nil {
 		f.Close()
 		if errors.Is(err, syscall.EWOULDBLOCK) {
-			return nil, errors.New("another dbtwin command (create, delete or refresh) is running. Try again when it finishes")
+			return nil, errors.New("another dbtwin command (create, delete, reset or refresh) is running. Try again when it finishes")
 		}
 		return nil, fmt.Errorf("can't lock %s: %v", path, err)
 	}

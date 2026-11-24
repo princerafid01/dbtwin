@@ -29,6 +29,17 @@ func freePort(addr string) (int, error) {
 	return l.Addr().(*net.TCPAddr).Port, nil
 }
 
+// portFree reports whether port is unused on addr.
+// We try to listen on it: if that works, nobody else has it.
+func portFree(addr string, port int) bool {
+	l, err := net.Listen("tcp", net.JoinHostPort(addr, strconv.Itoa(port)))
+	if err != nil {
+		return false
+	}
+	l.Close()
+	return true
+}
+
 // validName allows only letters, numbers, dash and underscore, 1 to 40 characters.
 // This keeps names safe for zfs, docker and the shell.
 var validName = regexp.MustCompile(`^[A-Za-z0-9_-]{1,40}$`)
@@ -62,9 +73,15 @@ func checkBranchFree(branch, snap, clone, container string) error {
 	return nil
 }
 
-// Create makes a new branch:
+// Create makes a new branch on any free port.
+func Create(cfg config.Config, branch string) error {
+	return create(cfg, branch, 0)
+}
+
+// create makes a new branch:
 // snapshot main -> clone -> delete auto.cnf -> start MySQL
-func Create(cfg config.Config, branch string) (err error) {
+// port is the host port for the branch's MySQL; 0 means pick a free one.
+func create(cfg config.Config, branch string, port int) (err error) {
 	snap := cfg.MainDataset + "@" + branch    // e.g. tank/mysql-main@pr-1
 	clone := cfg.BranchPrefix + branch        // e.g. tank/mysql-pr-1
 	container := cfg.ContainerPrefix + branch // e.g. mysql-pr-1
@@ -118,10 +135,16 @@ func Create(cfg config.Config, branch string) (err error) {
 		return fmt.Errorf("remove auto.cnf failed: %v", err)
 	}
 
-	// step 4: find a free port for this branch
-	port, err := freePort(cfg.BindAddress)
-	if err != nil {
-		return err
+	// step 4: use the given port if it is still free, else find a free one
+	if port != 0 && !portFree(cfg.BindAddress, port) {
+		fmt.Printf("warning: port %d is now used by something else, using a new port\n", port)
+		port = 0
+	}
+	if port == 0 {
+		port, err = freePort(cfg.BindAddress)
+		if err != nil {
+			return err
+		}
 	}
 	// e.g. 127.0.0.1:41235 (JoinHostPort adds [ ] around IPv6 addresses)
 	hostPort := net.JoinHostPort(cfg.BindAddress, strconv.Itoa(port))
@@ -223,6 +246,42 @@ func List(cfg config.Config) error {
 		date, _ := zfs.LocalProperty(cfg.MainDataset+"@"+branch, zfs.DataFrom)
 
 		fmt.Printf("%-12s %-8s %-16s %s\n", branch, d.Used, port, formatDataDate(date))
+	}
+	return nil
+}
+
+// Reset gives a branch main's newest data, keeping its name and port.
+// Everything changed on the branch is lost.
+// remember the port -> delete the branch -> create it again on that port
+func Reset(cfg config.Config, branchName string) error {
+	if err := checkName(branchName); err != nil {
+		return err
+	}
+	if err := checkNotMain(cfg, branchName); err != nil {
+		return err
+	}
+
+	// the branch must exist, or there is nothing to reset
+	clone := cfg.BranchPrefix + branchName
+	container := cfg.ContainerPrefix + branchName
+	if !zfs.Exists(clone) || !docker.Exists(container) {
+		return fmt.Errorf("branch %s not found (see \"dbtwin list\")", branchName)
+	}
+
+	// step 1: remember the port, so apps using this branch keep working
+	port, err := docker.HostPort(container)
+	if err != nil {
+		return err
+	}
+
+	// step 2: delete the branch and all its changes
+	if err := Delete(cfg, branchName); err != nil {
+		return err
+	}
+
+	// step 3: make it again from main, on the same port
+	if err := create(cfg, branchName, port); err != nil {
+		return fmt.Errorf("%v\nbranch %s was deleted but could not be made again. Run: dbtwin create %s", err, branchName, branchName)
 	}
 	return nil
 }

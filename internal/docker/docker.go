@@ -2,7 +2,9 @@
 package docker
 
 import (
+	"encoding/json"
 	"fmt"
+	"strconv"
 	"time"
 
 	"github.com/princerafid01/dbtwin/internal/command"
@@ -89,6 +91,30 @@ func RootLogin(container string) error {
 // e.g. 127.0.0.1:41235.
 func Port(container string) (string, error) {
 	return command.Output("docker", "port", container, "3306")
+}
+
+// HostPort returns the host port the container's MySQL port 3306 was
+// published on, e.g. 41235. Unlike Port, it also works when the
+// container is stopped: it reads the container's settings, not its
+// live state.
+func HostPort(container string) (int, error) {
+	// e.g. {"3306/tcp":[{"HostIp":"127.0.0.1","HostPort":"41235"}]}
+	out, err := command.Output("docker", "inspect", "-f", "{{json .HostConfig.PortBindings}}", container)
+	if err != nil {
+		return 0, err
+	}
+
+	var bindings map[string][]struct{ HostPort string }
+
+	if err := json.Unmarshal([]byte(out), &bindings); err != nil {
+		return 0, fmt.Errorf("can't read the ports of %s: %v", container, err)
+	}
+
+	mysql := bindings["3306/tcp"]
+	if len(mysql) == 0 {
+		return 0, fmt.Errorf("container %s has no host port for MySQL", container)
+	}
+	return strconv.Atoi(mysql[0].HostPort)
 }
 
 // lastLogs returns the last 20 lines the container printed.
