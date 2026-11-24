@@ -14,6 +14,15 @@ func Snapshot(snap string) error {
 	return command.Run("zfs", "snapshot", snap)
 }
 
+// SnapshotWithProperty makes a snapshot with a property set on it,
+// in one command. An empty value makes a plain snapshot.
+func SnapshotWithProperty(snap, prop, value string) error {
+	if value == "" {
+		return Snapshot(snap)
+	}
+	return command.Run("zfs", "snapshot", "-o", prop+"="+value, snap)
+}
+
 // Clone turns a snapshot into a new writable dataset.
 func Clone(snap, dataset string) error {
 	return command.Run("zfs", "clone", snap, dataset)
@@ -93,4 +102,28 @@ func List(pool string) ([]Dataset, error) {
 		datasets = append(datasets, Dataset{Name: fields[0], Used: fields[1]})
 	}
 	return datasets, nil
+}
+
+// DataFrom is the ZFS label that says when the data was copied from the source.
+// refresh writes it on main, create copies it onto each branch's snapshot,
+// and list reads it.
+const DataFrom = "dbtwin:data-from"
+
+// SetProperty sets a ZFS property, e.g. dbtwin:data-from=2026-11-23T03:00:00+06:00.
+func SetProperty(name, prop, value string) error {
+	return command.Run("zfs", "set", prop+"="+value, name)
+}
+
+// LocalProperty reads a property set on this exact dataset or snapshot.
+// It returns "" if there is none.
+func LocalProperty(name, prop string) (string, error) {
+	// -s local = only a value set right here, not one inherited from main
+	out, err := command.Output("zfs", "get", "-H", "-s", "local", "-o", "value", prop, name)
+	if err != nil {
+		return "", err
+	}
+	if out == "-" {
+		return "", nil
+	}
+	return out, nil
 }

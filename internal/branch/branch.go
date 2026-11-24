@@ -80,8 +80,14 @@ func Create(cfg config.Config, branch string) (err error) {
 		return err
 	}
 
-	// step 1: snapshot the main database
-	if err := zfs.Snapshot(snap); err != nil {
+	// step 1: snapshot the main database, copying main's data date onto it,
+	// so this branch keeps its own date when main is refreshed later
+	date, err := zfs.LocalProperty(cfg.MainDataset, zfs.DataFrom)
+	if err != nil {
+		fmt.Printf("warning: could not read main's data date: %v\n", err)
+		date = ""
+	}
+	if err := zfs.SnapshotWithProperty(snap, zfs.DataFrom, date); err != nil {
 		return err
 	}
 
@@ -167,14 +173,38 @@ func Delete(cfg config.Config, branch string) error {
 	return zfs.Destroy(snap)
 }
 
-// List prints every branch with its disk usage and port.
+// formatDataDate turns the saved date (e.g. 2026-11-23T03:00:00+06:00)
+// into a short local time like 2026-11-23 03:00.
+// No date, or one we can't read, shows as "unknown".
+func formatDataDate(raw string) string {
+	t, err := time.Parse(time.RFC3339, raw)
+	if err != nil {
+		return "unknown"
+	}
+	return t.Local().Format("2006-01-02 15:04")
+}
+
+// List prints main and every branch with its disk usage, port and data date.
 func List(cfg config.Config) error {
 	datasets, err := zfs.List(cfg.Pool)
 	if err != nil {
 		return err
 	}
 
-	fmt.Printf("%-12s %-8s %s\n", "BRANCH", "USED", "PORT")
+	fmt.Printf("%-12s %-8s %-16s %s\n", "BRANCH", "USED", "PORT", "DATA FROM")
+
+	// main first, so branches can be compared to it
+	for _, d := range datasets {
+		if d.Name == cfg.MainDataset {
+			date, _ := zfs.LocalProperty(cfg.MainDataset, zfs.DataFrom)
+
+			port, err := docker.Port(cfg.MainContainer)
+			if err != nil {
+				port = "not running"
+			}
+			fmt.Printf("%-12s %-8s %-16s %s\n", "(main)", d.Used, port, formatDataDate(date))
+		}
+	}
 
 	for _, d := range datasets {
 		// keep only branch datasets, skip main and others
@@ -189,7 +219,10 @@ func List(cfg config.Config) error {
 			port = "not running"
 		}
 
-		fmt.Printf("%-12s %-8s %s\n", branch, d.Used, port)
+		// the date lives on the branch's own snapshot, e.g. tank/mysql-main@pr-1
+		date, _ := zfs.LocalProperty(cfg.MainDataset+"@"+branch, zfs.DataFrom)
+
+		fmt.Printf("%-12s %-8s %-16s %s\n", branch, d.Used, port, formatDataDate(date))
 	}
 	return nil
 }

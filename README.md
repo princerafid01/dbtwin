@@ -279,12 +279,15 @@ mysql -h 127.0.0.1 -P 41235 -u root -p
 
 ```console
 $ sudo dbtwin list
-BRANCH       USED     PORT
-pr-42        1.2M     127.0.0.1:41235
-pr-43        840K     127.0.0.1:38017
+BRANCH       USED     PORT             DATA FROM
+(main)       10.9M    127.0.0.1:3306   2026-11-24 02:43
+pr-42        1.2M     127.0.0.1:41235  2026-11-24 02:43
+pr-43        840K     127.0.0.1:38017  2026-11-20 03:00
 ```
 
-`USED` is only the data that changed compared to main.
+`USED` for a branch is only the data that changed compared to main.
+
+`DATA FROM` is when the data was copied from the source by `dbtwin refresh`. A branch keeps the date main had when the branch was created, so later refreshes don't change it. `unknown` means it was never refreshed.
 
 ### Delete a branch
 
@@ -307,7 +310,6 @@ $ sudo dbtwin delete pr-42
 
 - **GitHub App**: create a branch when a PR opens, delete it when the PR closes
 - **Data masking**: hide sensitive data (emails, names, tokens) in branches
-- **Refresh versions**: keep the last few refreshes as snapshots, and create branches from the newest one
 - **Production sync**: keep main up to date from the binlog (CDC) instead of full dumps
 - **Migration checks**: run migrations on the branch and report problems on the PR
 - **Scale-to-zero**: stop idle branch containers and start them again on demand

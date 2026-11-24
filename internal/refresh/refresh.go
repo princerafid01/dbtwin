@@ -131,6 +131,9 @@ func Run(cfg config.Config) (err error) {
 	if err := stopped(); err != nil {
 		return err
 	}
+	// the data matches the source as it was when the dump starts
+	// (--single-transaction), so this is the data's date
+	started := time.Now()
 	if err := dumpAndLoad(ctx, cfg); err != nil {
 		return err
 	}
@@ -139,6 +142,9 @@ func Run(cfg config.Config) (err error) {
 	}
 	// from here on the new data is good; Ctrl+C no longer undoes it
 	loaded = true
+
+	// save when this data was copied, for "dbtwin list"
+	saveDataDate(cfg, started)
 
 	// FINISH
 	if err := removeSafety(cfg); err != nil {
@@ -244,6 +250,14 @@ func checkNoLeftover(cfg config.Config) error {
 // cut, and InnoDB repairs itself from that when it starts after a rollback.
 func safetySnapshot(cfg config.Config) error {
 	return zfs.Snapshot(safetyName(cfg))
+}
+
+// saveDataDate writes when the data was copied onto main, as a ZFS label.
+// A failure only warns: the new data is good and must not be undone.
+func saveDataDate(cfg config.Config, started time.Time) {
+	if err := zfs.SetProperty(cfg.MainDataset, zfs.DataFrom, started.Format(time.RFC3339)); err != nil {
+		fmt.Printf("warning: could not save the data date on %s: %v\n", cfg.MainDataset, err)
+	}
 }
 
 // rollback puts main back exactly as it was before the refresh:
