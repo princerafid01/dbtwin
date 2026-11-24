@@ -17,12 +17,12 @@ import (
 var version = "dev"
 
 // main reads the command and calls the right function.
-// Usage: dbtwin create <name> | dbtwin delete <name> | dbtwin list |
+// Usage: dbtwin create <name> | dbtwin delete <name> | dbtwin reset <name> | dbtwin list |
 // dbtwin connect --host <host> --user <user> --databases <databases> |
 // dbtwin connect --test | dbtwin refresh | dbtwin config | dbtwin version
 func main() {
 	if len(os.Args) < 2 {
-		fmt.Println("usage: dbtwin <create|delete|list|refresh|connect|config|version> [name]")
+		fmt.Println("usage: dbtwin <create|delete|reset|list|refresh|connect|config|version> [name]")
 		os.Exit(1)
 	}
 	command := os.Args[1]
@@ -41,7 +41,7 @@ func main() {
 
 	switch command {
 	case "list", "config", "refresh":
-	case "create", "delete":
+	case "create", "delete", "reset":
 		if len(os.Args) < 3 {
 			fmt.Println("usage: dbtwin", command, "<name>")
 			os.Exit(1)
@@ -78,7 +78,7 @@ func main() {
 	// drops the lock as soon as dbtwin ends, however it ends.
 	// the defer is still needed: it keeps the lock file open. without it,
 	// Go's garbage collector could close the file mid-command and drop the lock.
-	if command == "create" || command == "delete" || command == "refresh" {
+	if command == "create" || command == "delete" || command == "reset" || command == "refresh" {
 		release, err := lock.Take()
 		if err != nil {
 			fmt.Println(err)
@@ -96,6 +96,8 @@ func main() {
 		err = branch.Create(cfg, name)
 	case "delete":
 		err = branch.Delete(cfg, name)
+	case "reset":
+		err = branch.Reset(cfg, name)
 	case "refresh":
 		err = refresh.Run(cfg)
 	case "connect":

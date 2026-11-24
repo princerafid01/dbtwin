@@ -333,6 +333,31 @@ $ sudo dbtwin delete pr-42
 > zfs [destroy tank/mysql-main@pr-42]
 ```
 
+### Reset a branch
+
+`dbtwin reset` gives a branch main's newest data. It keeps the branch's name and port, so apps connected to it keep working.
+
+```console
+$ sudo dbtwin reset pr-42
+> docker [rm -f mysql-pr-42]
+> zfs [destroy tank/mysql-pr-42]
+> zfs [destroy tank/mysql-main@pr-42]
+> zfs [snapshot -o dbtwin:data-from=2026-11-24T03:00:00+01:00 tank/mysql-main@pr-42]
+> zfs [clone tank/mysql-main@pr-42 tank/mysql-pr-42]
+> docker [run -d --restart unless-stopped --name mysql-pr-42 -v /tank/mysql-pr-42:/var/lib/mysql -p 127.0.0.1:41235:3306 ...]
+waiting for MySQL...
+branch pr-42 is ready
+  host:     127.0.0.1
+  port:     41235
+  ...
+```
+
+⚠️ **Everything changed on the branch is lost.** Reset is `delete` followed by `create`, so there is no undo.
+
+- The branch gets main's data as it is now. To get the newest data from the source, run `dbtwin refresh` first.
+- If another program took the branch's port in the meantime, reset picks a new port and prints a warning.
+- If the branch can't be made again, the old one is already deleted. Run `dbtwin create <name>` to make it again.
+
 ## Status
 
 ⚠️ **Early prototype. Not production-ready.**
