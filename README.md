@@ -118,6 +118,8 @@ Settings are loaded in this order (later wins):
 | `source_user`        | (none)            | `DBTWIN_SOURCE_USER`        |
 | `source_password`    | (none)            | `DBTWIN_SOURCE_PASSWORD`    |
 | `source_databases`   | (none)            | `DBTWIN_SOURCE_DATABASES`   |
+| `mask_secret`        | (none)            | `DBTWIN_MASK_SECRET`        |
+| `mask`               | (none)            | (config file only)          |
 
 Example `/etc/dbtwin/config.json`:
 
@@ -136,6 +138,8 @@ The `source_*` settings describe the MySQL server that dbtwin copies from. They 
 
 `main_container` is the name of your main MySQL container. Only `dbtwin refresh` uses it.
 
+`mask` and `mask_secret` hide private data during `dbtwin refresh` (see [Mask private data](#mask-private-data)). `dbtwin config` shows `mask_secret` as `***`.
+
 If you change `pool`, also set `main_dataset` and `branch_prefix` to match.
 
 Override one setting for a single command:
@@ -150,7 +154,7 @@ See the settings in use:
 sudo dbtwin config
 ```
 
-The output is JSON, so you can save it as a starting config file (put the real `source_password` back in). A misspelled key or an empty value stops dbtwin with a clear error.
+The output is JSON, so you can save it as a starting config file (put the real `source_password` and `mask_secret` back in). A misspelled key or an empty value stops dbtwin with a clear error.
 
 ## Connect your database
 
@@ -230,7 +234,8 @@ What it does:
 2. **Takes a backup**: the snapshot `main@before-refresh`.
 3. **Drops** each source database in main, so tables that were removed on the source don't stay behind. Other databases in main are not touched.
 4. **Copies** the data with `mysqldump`, streamed straight into main's `mysql`. Nothing is written to a file on disk.
-5. **Deletes the backup** when the copy is complete.
+5. **Masks** private data, if you set up [mask rules](#mask-private-data).
+6. **Deletes the backup** when the copy is complete.
 
 Existing branches don't change. They keep the data they were created with. Branches created after the refresh get the new data.
 
@@ -284,6 +289,47 @@ If main's `DATA FROM` is older than last night, the refresh failed. The log says
 - **Another command was running.** A `create`, `delete` or `refresh` running at 03:00 makes the refresh stop with "another dbtwin command is running". Nothing changes, and it runs again the next night.
 - **A backup was left behind by a crash.** Every later refresh stops until you fix main by hand. The log shows the commands (see [Safety](#safety)).
 - **The source can't be reached** or its password changed. Test it with `dbtwin connect --test`.
+
+### Mask private data
+
+Refresh can hide private data, such as emails, names and phone numbers, so it never stays in main or in any branch. Add rules to `/etc/dbtwin/config.json`:
+
+```json
+{
+  "mask_secret": "a-long-random-secret",
+  "mask": {
+    "shop.customers": { "email": "email", "name": "hash", "phone": "null" },
+    "shop.orders":    { "note": "fixed:hidden" }
+  }
+}
+```
+
+Each key in `mask` is `database.table`. Inside it, each column gets one rule:
+
+| Rule           | New value                                       | Example                                  |
+|----------------|-------------------------------------------------|------------------------------------------|
+| `email`        | a fake email, 28 characters                     | `98b37f66a187e6a2@example.com`           |
+| `hash`         | 16 random-looking characters                    | `575ad1bb23d81c14`                       |
+| `null`         | empty (`NULL`)                                  | `NULL`                                   |
+| `fixed:<text>` | the same text in every row                      | `fixed:hidden` gives `hidden`            |
+
+Columns without a rule are copied as they are.
+
+```console
+$ sudo dbtwin refresh
+...
+copied 790 MB
+masking shop.customers
+masking shop.orders
+main now has a fresh copy of: shop
+```
+
+- **The same value always gets the same fake value.** `ayesha@gmail.com` becomes the same fake email in every table (with the same rule) and on every refresh, so joins between tables still match. The fake values are made from the real ones and `mask_secret`: without the secret, nobody can work back to the real data.
+- **Keep `mask_secret` secret, and don't change it.** A new secret gives every row a new fake value. You can also set it with `DBTWIN_MASK_SECRET` instead of the file.
+- **A mistake stops the refresh.** An unknown rule or a table not written as `database.table` stops refresh before anything changes. A column that doesn't exist, or a fake value that doesn't fit its column, stops it after the copy, and main is rolled back. Main never keeps unmasked data.
+- **Short columns:** `email` needs room for 28 characters and `hash` for 16. For shorter columns, use `null` or `fixed:<text>`. `hash` and `email` are for text columns; use `null` or `fixed:<text>` for number and date columns.
+- **The source is never changed.** Masking runs on main, after the copy.
+- Masking rewrites each masked table once more after the copy, so very large masked tables make refresh take longer.
 
 ## Usage
 
@@ -369,7 +415,6 @@ branch pr-42 is ready
 ## Roadmap
 
 - **GitHub App**: create a branch when a PR opens, delete it when the PR closes
-- **Data masking**: hide sensitive data (emails, names, tokens) in branches
 - **Production sync**: keep main up to date from the binlog (CDC) instead of full dumps
 - **Migration checks**: run migrations on the branch and report problems on the PR
 - **Scale-to-zero**: stop idle branch containers and start them again on demand

@@ -34,6 +34,12 @@ type Config struct {
 	SourceUser      string `json:"source_user"`      // MySQL user to read the source with
 	SourcePassword  string `json:"source_password"`  // password for SourceUser, never printed
 	SourceDatabases string `json:"source_databases"` // comma-separated list, e.g. "shop,blog"
+
+	// masking of private data after each refresh (see the mask package).
+	// no rules means no masking.
+	MaskSecret string                       `json:"mask_secret"`    // key for the hash and email rules, never printed
+	Mask       map[string]map[string]string `json:"mask,omitempty"` // "db.table" -> column -> rule
+
 }
 
 // defaultConfig returns the built-in settings.
@@ -90,6 +96,7 @@ func Load() (Config, bool, error) {
 		{"DBTWIN_MAIN_CONTAINER", &cfg.MainContainer},
 		{"DBTWIN_BRANCH_PREFIX", &cfg.BranchPrefix},
 		{"DBTWIN_CONTAINER_PREFIX", &cfg.ContainerPrefix},
+		{"DBTWIN_MASK_SECRET", &cfg.MaskSecret},
 		{"DBTWIN_MYSQL_IMAGE", &cfg.MySQLImage},
 		{"DBTWIN_BIND_ADDRESS", &cfg.BindAddress},
 		{"DBTWIN_BRANCH_MEMORY", &cfg.BranchMemory},
@@ -133,6 +140,10 @@ func (c Config) check() error {
 			return fmt.Errorf("config setting %q is empty", key)
 		}
 	}
+	// without a secret, anyone could rebuild the fake values from the real ones
+	if len(c.Mask) > 0 && c.MaskSecret == "" {
+		return errors.New(`config has "mask" rules but "mask_secret" is empty`)
+	}
 	return nil
 }
 
@@ -143,6 +154,10 @@ func Print(cfg Config, fileUsed bool) error {
 	// cfg is a copy, so this doesn't change the password the caller uses
 	if cfg.SourcePassword != "" {
 		cfg.SourcePassword = "***"
+	}
+
+	if cfg.MaskSecret != "" {
+		cfg.MaskSecret = "***"
 	}
 
 	if fileUsed {

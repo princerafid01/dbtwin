@@ -70,3 +70,17 @@ func OutputEnv(env []string, name string, args ...string) (string, string, error
 	err := cmd.Run()
 	return strings.TrimSpace(stdout.String()), strings.TrimSpace(stderr.String()), err
 }
+
+// OutputStdin runs a command, feeds it input on stdin, and returns
+// what it printed to stdout and stderr, as clean text.
+// Use this to pass secrets: unlike arguments, stdin doesn't show up in "ps".
+func OutputStdin(input, name string, args ...string) (string, string, error) {
+	cmd := exec.Command(name, args...)
+	cmd.Stdin = strings.NewReader(input)
+
+	var stdout, stderr bytes.Buffer
+	cmd.Stdout = &stdout
+	cmd.Stderr = &stderr
+	err := cmd.Run()
+	return strings.TrimSpace(stdout.String()), strings.TrimSpace(stderr.String()), err
+}
