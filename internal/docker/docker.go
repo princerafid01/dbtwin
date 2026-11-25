@@ -150,3 +150,19 @@ func WaitForMySQL(container string, timeout time.Duration) error {
 		time.Sleep(time.Second)
 	}
 }
+
+// RootSQLStdin is like RootSQL, but sends the SQL on stdin instead of
+// the command line. Use it when the SQL holds a secret: command lines
+// show up in "ps", stdin doesn't.
+func RootSQLStdin(container, sql string) error {
+	script := `test -n "$MYSQL_ROOT_PASSWORD" || { echo "MYSQL_ROOT_PASSWORD is not set in the container" >&2; exit 1; }
+MYSQL_PWD="$MYSQL_ROOT_PASSWORD" exec mysql -uroot`
+
+	_, stderr, err := command.OutputStdin(sql, "docker", "exec", "-i", container, "sh", "-c", script)
+
+	if err != nil {
+		return fmt.Errorf("%v: %s", err, stderr)
+	}
+	return nil
+
+}

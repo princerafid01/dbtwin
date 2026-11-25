@@ -24,6 +24,7 @@ import (
 
 	"github.com/princerafid01/dbtwin/internal/config"
 	"github.com/princerafid01/dbtwin/internal/docker"
+	"github.com/princerafid01/dbtwin/internal/mask"
 	"github.com/princerafid01/dbtwin/internal/source"
 	"github.com/princerafid01/dbtwin/internal/zfs"
 )
@@ -79,6 +80,10 @@ func Run(cfg config.Config) (err error) {
 	}
 	// the pool needs room for the new copy of the data
 	if err := checkFreeSpace(cfg, dbs); err != nil {
+		return err
+	}
+	// the mask rules must make sense, or we'd find out only after the load
+	if err := mask.Check(cfg); err != nil {
 		return err
 	}
 
@@ -138,6 +143,12 @@ func Run(cfg config.Config) (err error) {
 		return err
 	}
 	if err := stopped(); err != nil {
+		return err
+	}
+	// hide private data (emails, names...) before main is marked good.
+	// if masking fails, the rollback throws the unmasked data away,
+	// so main never keeps real private data
+	if err := mask.Run(cfg); err != nil {
 		return err
 	}
 	// from here on the new data is good; Ctrl+C no longer undoes it
