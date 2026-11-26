@@ -13,6 +13,10 @@ import (
 // can write there, which is fine: dbtwin always runs as root.
 const path = "/run/dbtwin.lock"
 
+// ErrBusy means another dbtwin command holds the lock.
+// The API checks for it to answer "busy, try again later".
+var ErrBusy = errors.New("another dbtwin command (create, delete, reset or refresh) is running. Try again when it finishes")
+
 // Take locks dbtwin, or fails right away if another dbtwin command
 // already holds the lock. Call the returned function to unlock.
 //
@@ -31,7 +35,7 @@ func Take() (release func(), err error) {
 	if err := syscall.Flock(int(f.Fd()), syscall.LOCK_EX|syscall.LOCK_NB); err != nil {
 		f.Close()
 		if errors.Is(err, syscall.EWOULDBLOCK) {
-			return nil, errors.New("another dbtwin command (create, delete, reset or refresh) is running. Try again when it finishes")
+			return nil, ErrBusy
 		}
 		return nil, fmt.Errorf("can't lock %s: %v", path, err)
 	}

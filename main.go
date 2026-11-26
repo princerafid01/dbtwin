@@ -89,15 +89,24 @@ func main() {
 
 	switch command {
 	case "list":
-		err = branch.List(cfg)
+		var infos []branch.Info
+		if infos, err = branch.List(cfg); err == nil {
+			printList(infos)
+		}
 	case "config":
 		err = config.Print(cfg, fileUsed)
 	case "create":
-		err = branch.Create(cfg, name)
+		var info branch.Info
+		if info, err = branch.Create(cfg, name); err == nil {
+			printReady(info)
+		}
 	case "delete":
 		err = branch.Delete(cfg, name)
 	case "reset":
-		err = branch.Reset(cfg, name)
+		var info branch.Info
+		if info, err = branch.Reset(cfg, name); err == nil {
+			printReady(info)
+		}
 	case "refresh":
 		err = refresh.Run(cfg)
 	case "connect":
