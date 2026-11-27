@@ -4,6 +4,7 @@ import (
 	"fmt"
 	"os"
 
+	"github.com/princerafid01/dbtwin/internal/api"
 	"github.com/princerafid01/dbtwin/internal/branch"
 	"github.com/princerafid01/dbtwin/internal/check"
 	"github.com/princerafid01/dbtwin/internal/config"
@@ -19,10 +20,10 @@ var version = "dev"
 // main reads the command and calls the right function.
 // Usage: dbtwin create <name> | dbtwin delete <name> | dbtwin reset <name> | dbtwin list |
 // dbtwin connect --host <host> --user <user> --databases <databases> |
-// dbtwin connect --test | dbtwin refresh | dbtwin config | dbtwin version
+// dbtwin connect --test | dbtwin refresh | dbtwin serve | dbtwin config | dbtwin version
 func main() {
 	if len(os.Args) < 2 {
-		fmt.Println("usage: dbtwin <create|delete|reset|list|refresh|connect|config|version> [name]")
+		fmt.Println("usage: dbtwin <create|delete|reset|list|refresh|connect|serve|config|version> [name]")
 		os.Exit(1)
 	}
 	command := os.Args[1]
@@ -40,7 +41,7 @@ func main() {
 	var connectArgs connectFlags // the --host, --port... values, only used by "connect"
 
 	switch command {
-	case "list", "config", "refresh":
+	case "list", "config", "refresh", "serve":
 	case "create", "delete", "reset":
 		if len(os.Args) < 3 {
 			fmt.Println("usage: dbtwin", command, "<name>")
@@ -109,6 +110,9 @@ func main() {
 		}
 	case "refresh":
 		err = refresh.Run(cfg)
+	case "serve":
+		// runs until stopped; each change takes the lock itself
+		err = api.Run(cfg)
 	case "connect":
 		if connectArgs.test {
 			// re-test the saved settings; changes nothing

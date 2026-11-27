@@ -3,6 +3,7 @@
 package check
 
 import (
+	"errors"
 	"fmt"
 	"os"
 	"os/exec"
@@ -10,8 +11,29 @@ import (
 	"github.com/princerafid01/dbtwin/internal/command"
 )
 
+// ErrNotReady means a startup check failed: root, zfs, docker or main is missing.
+// The API answers it with 503, "not ready, try again later".
+var ErrNotReady = errors.New("dbtwin is not ready")
+
+// notReady keeps a check's own message and also marks it as ErrNotReady,
+// so the CLI prints the same text as before and the API can spot it.
+type notReady struct {
+	err error
+}
+
+func (e notReady) Error() string { return e.err.Error() }
+func (e notReady) Unwrap() error { return ErrNotReady }
+
 // All runs every startup check and stops at the first problem.
 func All(mainDataset string) error {
+	if err := all(mainDataset); err != nil {
+		return notReady{err: err}
+	}
+	return nil
+}
+
+// all does the checks for All, in order.
+func all(mainDataset string) error {
 	if err := root(); err != nil {
 		return err
 	}

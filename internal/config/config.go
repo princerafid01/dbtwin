@@ -40,6 +40,10 @@ type Config struct {
 	MaskSecret string                       `json:"mask_secret"`    // key for the hash and email rules, never printed
 	Mask       map[string]map[string]string `json:"mask,omitempty"` // "db.table" -> column -> rule
 
+	// the HTTP API ("dbtwin serve").
+	// the token may be empty; only "serve" needs it, and refuses to start without it.
+	APIAddress string `json:"api_address"` // where the API listens, e.g. 127.0.0.1:8080
+	APIToken   string `json:"api_token"`   // secret every API request must send, never printed
 }
 
 // defaultConfig returns the built-in settings.
@@ -55,6 +59,7 @@ func defaultConfig() Config {
 		BranchMemory:     "512m",
 		BranchBufferPool: "128M",
 		SourcePort:       "3306",
+		APIAddress:       "127.0.0.1:8080",
 	}
 }
 
@@ -106,6 +111,8 @@ func Load() (Config, bool, error) {
 		{"DBTWIN_SOURCE_USER", &cfg.SourceUser},
 		{"DBTWIN_SOURCE_PASSWORD", &cfg.SourcePassword},
 		{"DBTWIN_SOURCE_DATABASES", &cfg.SourceDatabases},
+		{"DBTWIN_API_ADDRESS", &cfg.APIAddress},
+		{"DBTWIN_API_TOKEN", &cfg.APIToken},
 	}
 	for _, e := range envs {
 		if v := os.Getenv(e.name); v != "" {
@@ -134,6 +141,7 @@ func (c Config) check() error {
 		"bind_address":       c.BindAddress,
 		"branch_memory":      c.BranchMemory,
 		"branch_buffer_pool": c.BranchBufferPool,
+		"api_address":        c.APIAddress,
 	}
 	for key, value := range fields {
 		if value == "" {
@@ -158,6 +166,10 @@ func Print(cfg Config, fileUsed bool) error {
 
 	if cfg.MaskSecret != "" {
 		cfg.MaskSecret = "***"
+	}
+
+	if cfg.APIToken != "" {
+		cfg.APIToken = "***"
 	}
 
 	if fileUsed {
