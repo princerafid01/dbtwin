@@ -1,0 +1,11 @@
+# Caddy in front of "dbtwin serve": Caddy does HTTPS, dbtwin stays on 127.0.0.1.
+# Use this only if you already run Caddy. Otherwise set "api_domain" in
+# /etc/dbtwin/config.json and dbtwin does HTTPS by itself.
+#
+# 1. change dbtwin.example.com to your domain (it must point to this server)
+# 2. copy this file to /etc/caddy/Caddyfile
+# 3. sudo systemctl reload caddy
+
+dbtwin.example.com {
+	reverse_proxy 127.0.0.1:8080
+}

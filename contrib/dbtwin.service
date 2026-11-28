@@ -1,0 +1,30 @@
+# systemd keeps "dbtwin serve" running: it starts it at boot,
+# restarts it if it crashes, and stops it safely.
+#
+# 1. put the API token in /etc/dbtwin/config.json ("api_token"),
+#    e.g. made with: openssl rand -hex 32
+# 2. sudo cp contrib/dbtwin.service /etc/systemd/system/
+# 3. sudo systemctl daemon-reload && sudo systemctl enable --now dbtwin
+#
+# see its log with: journalctl -u dbtwin -f
+
+[Unit]
+Description=dbtwin HTTP API
+# dbtwin needs Docker and the ZFS pool, so start after them
+After=network-online.target docker.service zfs.target
+Wants=network-online.target docker.service
+
+[Service]
+ExecStart=/usr/local/bin/dbtwin serve
+Restart=on-failure
+RestartSec=5
+
+# "systemctl stop" sends SIGTERM only to dbtwin itself, not to the zfs and
+# docker commands it runs, so a create in progress can finish (see "serve")
+KillMode=mixed
+# dbtwin waits up to 2 minutes for running requests; give it a bit longer
+# (systemd's default is 90 seconds, which would cut a long create off)
+TimeoutStopSec=150
+
+[Install]
+WantedBy=multi-user.target

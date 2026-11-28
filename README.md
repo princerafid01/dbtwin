@@ -120,6 +120,9 @@ Settings are loaded in this order (later wins):
 | `source_databases`   | (none)            | `DBTWIN_SOURCE_DATABASES`   |
 | `mask_secret`        | (none)            | `DBTWIN_MASK_SECRET`        |
 | `mask`               | (none)            | (config file only)          |
+| `api_address`        | `127.0.0.1:8080`  | `DBTWIN_API_ADDRESS`        |
+| `api_token`          | (none)            | `DBTWIN_API_TOKEN`          |
+| `api_domain`         | (none)            | `DBTWIN_API_DOMAIN`         |
 
 Example `/etc/dbtwin/config.json`:
 
@@ -139,6 +142,8 @@ The `source_*` settings describe the MySQL server that dbtwin copies from. They 
 `main_container` is the name of your main MySQL container. Only `dbtwin refresh` uses it.
 
 `mask` and `mask_secret` hide private data during `dbtwin refresh` (see [Mask private data](#mask-private-data)). `dbtwin config` shows `mask_secret` as `***`.
+
+`api_address`, `api_token` and `api_domain` are for `dbtwin serve` (see [HTTP API](#http-api)). `dbtwin config` shows `api_token` as `***`.
 
 If you change `pool`, also set `main_dataset` and `branch_prefix` to match.
 
@@ -403,6 +408,133 @@ branch pr-42 is ready
 - The branch gets main's data as it is now. To get the newest data from the source, run `dbtwin refresh` first.
 - If another program took the branch's port in the meantime, reset picks a new port and prints a warning.
 - If the branch can't be made again, the old one is already deleted. Run `dbtwin create <name>` to make it again.
+
+## HTTP API
+
+`dbtwin serve` runs an HTTP API, so CI (for example a GitHub Action) can create, reset and delete branches from another machine. It does the same work as the commands above, with the same checks and the same lock.
+
+### Start the API
+
+Make a secret token and put it in `/etc/dbtwin/config.json`:
+
+```bash
+openssl rand -hex 32
+```
+
+```json
+{
+  "api_token": "paste-the-token-here"
+}
+```
+
+Then start it:
+
+```console
+$ sudo dbtwin serve
+2026/11/27 19:26:13 dbtwin API listening on 127.0.0.1:8080
+```
+
+`dbtwin serve` refuses to start without `api_token`. It listens on `127.0.0.1:8080` (`api_address`), so only this machine can reach it until you add HTTPS (see [Reach the API from outside](#reach-the-api-from-outside)).
+
+### Keep it running
+
+[contrib/dbtwin.service](contrib/dbtwin.service) lets systemd start the API at boot, restart it if it crashes, and stop it safely:
+
+```bash
+sudo cp dbtwin /usr/local/bin/
+sudo cp contrib/dbtwin.service /etc/systemd/system/
+sudo systemctl daemon-reload
+sudo systemctl enable --now dbtwin
+journalctl -u dbtwin -f    # see the log
+```
+
+When the API stops (`systemctl stop` or Ctrl+C), it takes no new requests and waits up to 2 minutes for a running create, reset or delete to finish. Press Ctrl+C twice to stop at once.
+
+### Reach the API from outside
+
+The token must never travel over plain HTTP, so use HTTPS. Pick one:
+
+| You have                     | Do this                                                                                                          |
+|------------------------------|------------------------------------------------------------------------------------------------------------------|
+| Nothing on port 443          | Set `"api_domain": "dbtwin.example.com"`. dbtwin serves HTTPS on port 443 with free Let's Encrypt certificates. |
+| Caddy                        | Use [contrib/Caddyfile](contrib/Caddyfile).                                                                      |
+| nginx                        | Use [contrib/nginx.conf](contrib/nginx.conf) and `certbot --nginx`.                                              |
+| CI on this same machine      | Nothing. Call `http://127.0.0.1:8080`.                                                                           |
+
+With `api_domain`, the domain must point to this server and port 443 must be open. Certificates are kept in `/var/lib/dbtwin/certs`. If another program already uses port 443, `dbtwin serve` says so and stops; leave `api_domain` empty and use Caddy or nginx instead.
+
+### Routes
+
+Every `/v1` request needs the header `Authorization: Bearer <token>`.
+
+| Method   | Path                          | Does                                            | Success |
+|----------|-------------------------------|-------------------------------------------------|---------|
+| `GET`    | `/healthz`                    | Is the API up? (no token needed)                | `200`   |
+| `GET`    | `/v1/branches`                | List main and every branch                      | `200`   |
+| `GET`    | `/v1/branches/{name}`         | One branch                                      | `200`   |
+| `POST`   | `/v1/branches`                | Create a branch, body `{"name":"pr-42"}`        | `201`   |
+| `POST`   | `/v1/branches/{name}/reset`   | Reset a branch to main's newest data            | `200`   |
+| `DELETE` | `/v1/branches/{name}`         | Delete a branch                                 | `200`   |
+
+Create a branch:
+
+```console
+$ curl -s -H "Authorization: Bearer $TOKEN" -d '{"name":"pr-42"}' http://127.0.0.1:8080/v1/branches
+{"name":"pr-42","main":false,"host":"127.0.0.1","port":41235,"status":"running","data_from":"2026-11-25T02:57:45+01:00"}
+```
+
+List branches:
+
+```console
+$ curl -s -H "Authorization: Bearer $TOKEN" http://127.0.0.1:8080/v1/branches
+{"branches":[{"name":"main","main":true,"host":"127.0.0.1","port":3306,"status":"running","used":"11.4M","data_from":"2026-11-25T02:57:45+01:00"},{"name":"pr-42","main":false,"host":"127.0.0.1","port":41235,"status":"running","used":"45K","data_from":"2026-11-25T02:57:45+01:00"}]}
+```
+
+Reset and delete:
+
+```bash
+curl -s -X POST   -H "Authorization: Bearer $TOKEN" http://127.0.0.1:8080/v1/branches/pr-42/reset
+curl -s -X DELETE -H "Authorization: Bearer $TOKEN" http://127.0.0.1:8080/v1/branches/pr-42
+```
+
+A create or reset can take a while (MySQL has to start). If the client gives up or disconnects, the work still finishes; ask again with `GET /v1/branches/{name}`.
+
+### Errors
+
+Errors look like this:
+
+```json
+{"error":{"code":"not_found","message":"branch pr-42 not found (see \"dbtwin list\")"}}
+```
+
+| Status | Code             | Means                                                                    |
+|--------|------------------|--------------------------------------------------------------------------|
+| `400`  | `bad_request`    | The body isn't JSON like `{"name":"pr-42"}`, or is over 1 KB             |
+| `400`  | `invalid_name`   | Names use only letters, numbers, `-` and `_` (max 40 characters)         |
+| `400`  | `main_protected` | `main` can't be created, reset or deleted                                |
+| `401`  | `unauthorized`   | Missing or wrong token                                                   |
+| `404`  | `not_found`      | No such branch, or no such route                                         |
+| `409`  | `already_exists` | A branch with this name already exists                                   |
+| `409`  | `busy`           | Another create, reset, delete or refresh is running. Try again after `Retry-After` seconds |
+| `503`  | `not_ready`      | ZFS, Docker or main is not available on the server                       |
+| `500`  | `internal`       | Something else failed; the server log has the details                   |
+
+### Log
+
+The API writes one line per request, without the token:
+
+```
+2026/11/27 07:05:41 POST /v1/branches 201 14.2s
+2026/11/27 07:05:42 DELETE /v1/branches/main 400 181ms
+```
+
+### Tests
+
+The API has tests that need no root, ZFS or Docker:
+
+```bash
+go test ./...
+```
 
 ## Status
 
