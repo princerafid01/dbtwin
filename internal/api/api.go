@@ -13,6 +13,8 @@ import (
 	"syscall"
 	"time"
 
+	"golang.org/x/crypto/acme/autocert"
+
 	"github.com/princerafid01/dbtwin/internal/config"
 )
 
@@ -25,7 +27,7 @@ func Run(cfg config.Config) error {
 	}
 
 	srv := &http.Server{
-		Addr:    cfg.APIAddress,
+		Addr: cfg.APIAddress,
 		// logRequests wraps every route, so each request gets one log line
 		Handler: logRequests(New(cfg.APIToken, branchService{cfg: cfg})),
 
@@ -43,16 +45,38 @@ func Run(cfg config.Config) error {
 	ctx, stop := signal.NotifyContext(context.Background(), os.Interrupt, syscall.SIGTERM)
 	defer stop()
 
+	// with api_domain set, serve HTTPS ourselves (no Caddy needed)
+	if cfg.APIDomain != "" {
+		certs := &autocert.Manager{
+			Prompt:     autocert.AcceptTOS,                    // accept Let's Encrypt's terms
+			HostPolicy: autocert.HostWhitelist(cfg.APIDomain), // only get certificates for our domain
+			Cache:      autocert.DirCache(certDir),            // keep them across restarts
+		}
+		srv.Addr = ":443"
+		// Let's Encrypt checks we own the domain over this same port 443,
+		// so port 80 isn't needed
+		srv.TLSConfig = certs.TLSConfig()
+	}
+
 	// serve in the background, so Run can wait for a stop signal at the same time
 	served := make(chan error, 1)
 	go func() {
+		if srv.TLSConfig != nil {
+			log.Printf("dbtwin API listening on https://%s (port 443)", cfg.APIDomain)
+			served <- srv.ListenAndServeTLS("", "") // certificates come from TLSConfig
+			return
+		}
 		log.Printf("dbtwin API listening on %s", cfg.APIAddress)
 		served <- srv.ListenAndServe()
 	}()
 
 	select {
 	case err := <-served:
-		return err // the server never started, e.g. the port is already in use
+		// the server never started, e.g. the port is already in use
+		if srv.TLSConfig != nil {
+			return fmt.Errorf("%w (if another web server like nginx or Caddy uses port 443, leave \"api_domain\" empty and put that server in front of dbtwin)", err)
+		}
+		return err
 	case <-ctx.Done():
 	}
 
@@ -74,6 +98,9 @@ func Run(cfg config.Config) error {
 // shutdownWait is how long a stop waits for running requests.
 // It matches WriteTimeout: no request can run longer than that anyway.
 const shutdownWait = 2 * time.Minute
+
+// certDir is where HTTPS certificates are saved when api_domain is set.
+const certDir = "/var/lib/dbtwin/certs"
 
 // New builds the API's routes.
 // svc does the branch work; token is the secret every /v1 request must send.

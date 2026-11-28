@@ -44,6 +44,10 @@ type Config struct {
 	// the token may be empty; only "serve" needs it, and refuses to start without it.
 	APIAddress string `json:"api_address"` // where the API listens, e.g. 127.0.0.1:8080
 	APIToken   string `json:"api_token"`   // secret every API request must send, never printed
+	// if set, the API serves HTTPS on port 443 for this domain, with free
+	// certificates it gets by itself (api_address is then not used).
+	// empty means plain HTTP on api_address, e.g. behind Caddy or Nginx.
+	APIDomain string `json:"api_domain"` // e.g. dbtwin.example.com
 }
 
 // defaultConfig returns the built-in settings.
@@ -113,6 +117,7 @@ func Load() (Config, bool, error) {
 		{"DBTWIN_SOURCE_DATABASES", &cfg.SourceDatabases},
 		{"DBTWIN_API_ADDRESS", &cfg.APIAddress},
 		{"DBTWIN_API_TOKEN", &cfg.APIToken},
+		{"DBTWIN_API_DOMAIN", &cfg.APIDomain},
 	}
 	for _, e := range envs {
 		if v := os.Getenv(e.name); v != "" {
